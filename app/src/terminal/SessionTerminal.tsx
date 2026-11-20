@@ -21,10 +21,22 @@ export function SessionTerminal() {
 
     const client = new DaemonClient();
     let sessionId: string | null = null;
+    let lastSeq = 0;
 
-    const sendResize = () => {
+    const sendResize = (rows = terminal.rows) => {
       if (sessionId === null) return;
-      client.send({ type: 'session.resize', id: sessionId, cols: terminal.cols, rows: terminal.rows });
+      client.send({ type: 'session.resize', id: sessionId, cols: terminal.cols, rows });
+    };
+
+    // The kernel only signals SIGWINCH when the size changes, so shrink by
+    // one row and restore it to make the agent repaint over the replay.
+    const forceRedraw = () => {
+      sendResize(Math.max(terminal.rows - 1, 1));
+      sendResize();
+    };
+
+    const attach = () => {
+      if (sessionId !== null) client.send({ type: 'session.attach', id: sessionId });
     };
 
     const handleMessage = (message: ServerMessage) => {
@@ -34,14 +46,21 @@ export function SessionTerminal() {
           break;
         case 'session.list.result':
           sessionId = message.sessions[0]?.id ?? null;
-          if (sessionId !== null) client.send({ type: 'session.attach', id: sessionId });
+          attach();
           break;
         case 'session.snapshot':
+          lastSeq = message.seq;
           terminal.reset();
           terminal.write(message.data);
-          sendResize();
+          forceRedraw();
           break;
         case 'session.output':
+          if (message.seq <= lastSeq) break;
+          if (message.seq !== lastSeq + 1) {
+            attach();
+            break;
+          }
+          lastSeq = message.seq;
           terminal.write(message.data);
           break;
         case 'error':
@@ -54,7 +73,7 @@ export function SessionTerminal() {
     const input = terminal.onData((data) => {
       if (sessionId !== null) client.send({ type: 'session.input', id: sessionId, data });
     });
-    const resize = terminal.onResize(sendResize);
+    const resize = terminal.onResize(() => sendResize());
     const observer = new ResizeObserver(() => fit.fit());
     observer.observe(container);
     client.start();
