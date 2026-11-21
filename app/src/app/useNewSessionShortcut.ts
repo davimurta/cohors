@@ -15,7 +15,7 @@ export function useNewSessionShortcut(): void {
       if (!modifier || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'n') return;
       event.preventDefault();
       event.stopPropagation();
-      openNewSession();
+      if (useAppStore.getState().connection === 'ready') openNewSession();
     };
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true });

@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { DaemonErrorScreen } from '../daemon-error/DaemonErrorScreen.tsx';
 import { EmptyState } from '../empty/EmptyState.tsx';
 import { NewSessionDialog } from '../new-session/NewSessionDialog.tsx';
 import { SessionView } from '../session/SessionView.tsx';
@@ -13,6 +14,8 @@ export function App() {
     state.sessions.find((session) => session.id === state.selectedId),
   );
   const hasSessions = useAppStore((state) => state.sessions.length > 0);
+  const connection = useAppStore((state) => state.connection);
+  const daemonDown = connection === 'unavailable' || connection === 'incompatible';
 
   useNewSessionShortcut();
 
@@ -28,8 +31,14 @@ export function App() {
   return (
     <div className={styles.app}>
       <Sidebar />
-      {!hasSessions && <EmptyState />}
-      {selected !== undefined && <SessionView key={selected.id} session={selected} />}
+      {daemonDown ? (
+        <DaemonErrorScreen incompatible={connection === 'incompatible'} />
+      ) : (
+        <>
+          {!hasSessions && <EmptyState />}
+          {selected !== undefined && <SessionView key={selected.id} session={selected} />}
+        </>
+      )}
       <NewSessionDialog />
     </div>
   );

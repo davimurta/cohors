@@ -1,10 +1,12 @@
-import { Plus, Power } from 'lucide-react';
+import { Plus } from 'lucide-react';
+import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { NEW_SESSION_KEYS, NEW_SESSION_SHORTCUT } from '../platform.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
 import { useAppStore } from '../state/store.ts';
 import { SessionItem } from './SessionItem.tsx';
+import { ShutdownAllButton } from './ShutdownAllButton.tsx';
 import styles from './Sidebar.module.css';
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
@@ -22,6 +24,7 @@ export function Sidebar() {
   const select = useAppStore((state) => state.select);
   const openNewSession = useAppStore((state) => state.openNewSession);
   const home = useHomeDir();
+  const daemonDown = connection === 'unavailable' || connection === 'incompatible';
 
   return (
     <aside className={styles.sidebar}>
@@ -42,12 +45,40 @@ export function Sidebar() {
         className={styles.newSession}
         icon={<Plus size={16} aria-hidden="true" />}
         aria-keyshortcuts={NEW_SESSION_KEYS}
+        disabled={daemonDown}
         onClick={openNewSession}
       >
         <span className={styles.newSessionLabel}>Nova sessão</span>
-        <span className={styles.shortcut}>{NEW_SESSION_SHORTCUT}</span>
+        {!daemonDown && <span className={styles.shortcut}>{NEW_SESSION_SHORTCUT}</span>}
       </Button>
 
+      {daemonDown ? (
+        <p className={styles.empty}>As sessões ficam indisponíveis até o daemon voltar.</p>
+      ) : (
+        <SessionsNav sessions={sessions} selectedId={selectedId} home={home} onSelect={select} />
+      )}
+
+      <div className={styles.footer}>
+        <span className={`${styles.connection} ${styles[connection]}`} role="status">
+          <span className={styles.connectionDot} aria-hidden="true" />
+          {CONNECTION_LABEL[connection]}
+        </span>
+        {!daemonDown && sessions.length > 0 && <ShutdownAllButton />}
+      </div>
+    </aside>
+  );
+}
+
+interface SessionsNavProps {
+  sessions: SessionMeta[];
+  selectedId: string | null;
+  home: string | null;
+  onSelect: (id: string) => void;
+}
+
+function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps) {
+  return (
+    <>
       <div role="tablist" aria-label="Sessões" className={styles.tabs}>
         <button type="button" role="tab" aria-selected="true" className={styles.tab}>
           Ativas <span className={styles.count}>{sessions.length}</span>
@@ -67,23 +98,11 @@ export function Sidebar() {
               session={session}
               selected={session.id === selectedId}
               home={home}
-              onSelect={select}
+              onSelect={onSelect}
             />
           ))}
         </nav>
       )}
-
-      <div className={styles.footer}>
-        <span className={`${styles.connection} ${styles[connection]}`} role="status">
-          <span className={styles.connectionDot} aria-hidden="true" />
-          {CONNECTION_LABEL[connection]}
-        </span>
-        {sessions.length > 0 && (
-          <Button variant="ghost" size="small" icon={<Power size={14} aria-hidden="true" />} disabled>
-            Encerrar tudo
-          </Button>
-        )}
-      </div>
-    </aside>
+    </>
   );
 }

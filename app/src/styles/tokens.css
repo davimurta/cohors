@@ -38,6 +38,8 @@
   /* Error */
   --color-error-dot: #dc2626;
   --color-error-text: #b91c1c;
+  --color-error-bg: #fef2f2;
+  --color-error-border: #fecaca;
 
   /* Terminal */
   --color-terminal-bg: #1c1917;
