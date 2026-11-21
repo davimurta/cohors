@@ -14,6 +14,7 @@ pub mod server;
 pub mod session;
 pub mod sessions;
 pub mod store;
+pub mod summary;
 pub mod terminal_modes;
 pub mod transcript;
 pub mod utf8;

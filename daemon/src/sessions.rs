@@ -11,9 +11,12 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::executable;
-use crate::protocol::{Agent, ErrorCode, Project, ServerMessage, SessionMeta, SessionStatus};
+use crate::protocol::{
+    Agent, ErrorCode, Project, ServerMessage, SessionMeta, SessionStatus, SummaryStatus,
+};
 use crate::session::{Launch, Session, SessionError};
 use crate::store::SessionStore;
+use crate::summary;
 
 const CLAUDE_COMMAND: &str = "claude";
 const EVENT_QUEUE: usize = 256;
@@ -24,6 +27,8 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// streams output every few hundred milliseconds while it works and none
 /// at all while it waits at its prompt.
 pub const IDLE_AFTER: Duration = Duration::from_secs(10);
+/// The history view shows at most this much of a transcript.
+const TRANSCRIPT_VIEW_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionsError {
@@ -89,12 +94,19 @@ impl Sessions {
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let mut entries = HashMap::new();
         for mut meta in store.load_all() {
+            let mut changed = false;
             if meta.status.is_live() {
                 let last_activity = store.transcript_modified(&meta.id);
                 mark_interrupted(&mut meta, last_activity);
-                if let Err(error) = store.save(&meta) {
-                    eprintln!("failed to save session {}: {error}", meta.id);
-                }
+                changed = true;
+            }
+            // The daemon that was generating this summary is gone.
+            if meta.summary_status == SummaryStatus::Pending {
+                meta.summary_status = SummaryStatus::Failed;
+                changed = true;
+            }
+            if changed && let Err(error) = store.save(&meta) {
+                eprintln!("failed to save session {}: {error}", meta.id);
             }
             let transcript = store
                 .open_transcript(&meta.id)
@@ -157,6 +169,8 @@ impl Sessions {
             project_id: project.map(|project| project.id.clone()),
             claude_config_dir: project.and_then(|project| project.claude_config_dir.clone()),
             ssh_key: project.and_then(|project| project.ssh_key.clone()),
+            notes: String::new(),
+            summary_status: SummaryStatus::None,
         };
         let launch = launch_for(&self.path, &meta, &cwd, false)?;
         let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
@@ -229,15 +243,179 @@ impl Sessions {
                     eprintln!("failed to save session {}: {error}", meta.id);
                 }
             }
-            entry.session.terminate();
         }
-        let deadline = Instant::now() + SHUTDOWN_GRACE;
-        while entries.iter().any(|entry| entry.session.is_alive()) && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(50));
+        stop_processes(&entries);
+    }
+
+    /// Moves a session to the history. Its process is stopped separately,
+    /// with `stop_process`, because that blocks. Returns the session; a
+    /// `Pending` summary status means the caller should run the summary.
+    pub fn finish(&self, id: &str, with_summary: bool) -> Result<SessionMeta, SessionsError> {
+        self.update(id, |meta| {
+            if meta.status == SessionStatus::Finished {
+                return Err(SessionsError::InvalidState(meta.status));
+            }
+            let summarize = with_summary && can_summarize(meta);
+            meta.status = SessionStatus::Finished;
+            meta.idle_since = None;
+            // Exited and interrupted sessions keep the time they actually stopped.
+            if meta.ended_at.is_none() {
+                meta.ended_at = Some(now()?);
+            }
+            meta.summary_status = if summarize {
+                SummaryStatus::Pending
+            } else {
+                SummaryStatus::None
+            };
+            Ok(())
+        })
+    }
+
+    /// Blocks until the session's process is gone.
+    pub fn stop_process(&self, id: &str) {
+        if let Some(entry) = self.get(id) {
+            stop_processes(&[entry]);
         }
-        for entry in &entries {
-            entry.session.force_kill();
+    }
+
+    /// Asks for a new summary of a finished Claude session.
+    pub fn retry_summary(&self, id: &str) -> Result<SessionMeta, SessionsError> {
+        self.update(id, |meta| {
+            let allowed = meta.status == SessionStatus::Finished
+                && can_summarize(meta)
+                && meta.summary_status != SummaryStatus::Pending;
+            if !allowed {
+                return Err(SessionsError::InvalidState(meta.status));
+            }
+            meta.summary_status = SummaryStatus::Pending;
+            Ok(())
+        })
+    }
+
+    /// "Finalizar sem resumo": drops a pending or failed summary.
+    pub fn skip_summary(&self, id: &str) -> Result<SessionMeta, SessionsError> {
+        self.update(id, |meta| {
+            if meta.status != SessionStatus::Finished {
+                return Err(SessionsError::InvalidState(meta.status));
+            }
+            meta.summary_status = SummaryStatus::None;
+            Ok(())
+        })
+    }
+
+    /// How `claude -p --resume` must run to summarize this session: same
+    /// folder, account and SSH key as the session itself.
+    pub fn summary_launch(&self, id: &str) -> Result<Launch, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let meta = lock(&entry.meta)?.clone();
+        let cwd = existing_dir(&meta.cwd)?;
+        let mut launch = launch_for(&self.path, &meta, &cwd, true)?;
+        launch.args = vec![
+            "-p".to_owned(),
+            "--resume".to_owned(),
+            meta.agent_session_id.unwrap_or_default(),
+            summary::PROMPT.to_owned(),
+        ];
+        Ok(launch)
+    }
+
+    /// Records a summary result, unless the user skipped it meanwhile.
+    pub fn summary_finished(&self, id: &str, result: Result<String, String>) {
+        let Some(entry) = self.get(id) else {
+            return;
+        };
+        let Ok(mut meta) = entry.meta.lock() else {
+            return;
+        };
+        if meta.summary_status != SummaryStatus::Pending {
+            return;
         }
+        let (status, text) = match result {
+            Ok(text) => match self.store.save_summary(id, &text) {
+                Ok(()) => (SummaryStatus::Done, Some(text)),
+                Err(error) => {
+                    eprintln!("failed to save summary {id}: {error}");
+                    (SummaryStatus::Failed, None)
+                }
+            },
+            Err(reason) => {
+                eprintln!("summary of {id} failed: {reason}");
+                (SummaryStatus::Failed, None)
+            }
+        };
+        meta.summary_status = status;
+        if let Err(error) = self.store.save(&meta) {
+            eprintln!("failed to save session {id}: {error}");
+        }
+        let updated = meta.clone();
+        drop(meta);
+        self.announce(ServerMessage::SessionUpdated { session: updated });
+        self.announce(ServerMessage::SessionSummary {
+            id: id.to_owned(),
+            status,
+            text,
+        });
+    }
+
+    pub fn summary(&self, id: &str) -> Result<ServerMessage, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let status = lock(&entry.meta)?.summary_status;
+        Ok(ServerMessage::SessionSummary {
+            id: id.to_owned(),
+            status,
+            text: self.store.read_summary(id)?,
+        })
+    }
+
+    pub fn set_notes(&self, id: &str, notes: String) -> Result<SessionMeta, SessionsError> {
+        self.update(id, |meta| {
+            meta.notes = notes;
+            Ok(())
+        })
+    }
+
+    pub fn transcript(&self, id: &str) -> Result<ServerMessage, SessionsError> {
+        self.get(id).ok_or(SessionsError::NotFound)?;
+        let bytes = self.store.read_transcript(id, TRANSCRIPT_VIEW_BYTES + 1)?;
+        let truncated = bytes.len() as u64 > TRANSCRIPT_VIEW_BYTES;
+        let start = bytes.len().saturating_sub(TRANSCRIPT_VIEW_BYTES as usize);
+        Ok(ServerMessage::SessionTranscriptResult {
+            id: id.to_owned(),
+            data: String::from_utf8_lossy(&bytes[start..]).into_owned(),
+            truncated,
+        })
+    }
+
+    /// Removes a finished session and its folder for good.
+    pub fn delete(&self, id: &str) -> Result<(), SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let meta = lock(&entry.meta)?;
+        if meta.status != SessionStatus::Finished || meta.summary_status == SummaryStatus::Pending {
+            return Err(SessionsError::InvalidState(meta.status));
+        }
+        drop(meta);
+        lock(&self.entries)?.remove(id);
+        self.store.remove(id)?;
+        self.announce(ServerMessage::SessionDeleted { id: id.to_owned() });
+        Ok(())
+    }
+
+    /// Applies `change` to a session's metadata, saves it and tells clients.
+    fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut SessionMeta) -> Result<(), SessionsError>,
+    ) -> Result<SessionMeta, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let mut meta = lock(&entry.meta)?;
+        change(&mut meta)?;
+        self.store.save(&meta)?;
+        let updated = meta.clone();
+        drop(meta);
+        self.announce(ServerMessage::SessionUpdated {
+            session: updated.clone(),
+        });
+        Ok(updated)
     }
 
     pub fn announce_projects(&self, projects: Vec<Project>) {
@@ -313,6 +491,24 @@ impl Sessions {
     fn announce(&self, message: ServerMessage) {
         // No receivers simply means no client is connected.
         let _ = self.events.send(message);
+    }
+}
+
+fn can_summarize(meta: &SessionMeta) -> bool {
+    meta.agent == Agent::Claude && meta.agent_session_id.is_some()
+}
+
+/// Asks the processes to end, waits a grace period, then kills the rest.
+fn stop_processes(entries: &[Arc<SessionEntry>]) {
+    for entry in entries {
+        entry.session.terminate();
+    }
+    let deadline = Instant::now() + SHUTDOWN_GRACE;
+    while entries.iter().any(|entry| entry.session.is_alive()) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    for entry in entries {
+        entry.session.force_kill();
     }
 }
 
@@ -515,6 +711,8 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            notes: String::new(),
+            summary_status: SummaryStatus::None,
         }
     }
 
@@ -595,6 +793,115 @@ mod tests {
         sessions.refresh_idle(Instant::now());
         assert_eq!(status_of(&sessions, &meta.id), SessionStatus::Running);
         assert_eq!(entry.meta.lock().expect("meta").idle_since, None);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finish_notes_and_delete() {
+        let root = temp_root();
+        let sessions = load(&root);
+        let meta = sessions.create(shell_request("s")).expect("create");
+
+        let finished = sessions.finish(&meta.id, true).expect("finish");
+        assert_eq!(finished.status, SessionStatus::Finished);
+        // Shells have no summary even when asked for one.
+        assert_eq!(finished.summary_status, SummaryStatus::None);
+        assert!(finished.ended_at.is_some());
+        sessions.stop_process(&meta.id);
+        assert!(!sessions.get(&meta.id).expect("entry").session.is_alive());
+        // The exit of the stopped process must not turn it into "exited".
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(status_of(&sessions, &meta.id), SessionStatus::Finished);
+        assert!(matches!(
+            sessions.finish(&meta.id, false),
+            Err(SessionsError::InvalidState(_))
+        ));
+
+        let noted = sessions
+            .set_notes(&meta.id, "revisar".into())
+            .expect("notes");
+        assert_eq!(noted.notes, "revisar");
+
+        sessions.delete(&meta.id).expect("delete");
+        assert!(sessions.get(&meta.id).is_none());
+        assert!(!root.join(&meta.id).exists());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_sessions_cannot_be_deleted() {
+        let root = temp_root();
+        let sessions = load(&root);
+        let meta = sessions.create(shell_request("s")).expect("create");
+        assert!(matches!(
+            sessions.delete(&meta.id),
+            Err(SessionsError::InvalidState(_))
+        ));
+        sessions.shutdown();
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn summary_result_is_kept_unless_skipped() {
+        let root = temp_root();
+        let store = SessionStore::new(root.clone());
+        let claude = SessionMeta {
+            agent: Agent::Claude,
+            agent_session_id: Some("agent".into()),
+            status: SessionStatus::Exited,
+            ..meta("c")
+        };
+        store.save(&claude).expect("save");
+        let sessions = load(&root);
+
+        let finished = sessions.finish("c", true).expect("finish");
+        assert_eq!(finished.summary_status, SummaryStatus::Pending);
+        sessions.summary_finished("c", Err("no conversation".into()));
+        let entry = sessions.get("c").expect("entry");
+        assert_eq!(
+            entry.meta.lock().expect("meta").summary_status,
+            SummaryStatus::Failed
+        );
+
+        sessions.retry_summary("c").expect("retry");
+        sessions.summary_finished("c", Ok("## O que foi feito".into()));
+        let ServerMessage::SessionSummary { status, text, .. } =
+            sessions.summary("c").expect("summary")
+        else {
+            panic!("expected a summary");
+        };
+        assert_eq!(status, SummaryStatus::Done);
+        assert_eq!(text.as_deref(), Some("## O que foi feito"));
+
+        sessions.retry_summary("c").expect("retry again");
+        sessions.skip_summary("c").expect("skip");
+        sessions.summary_finished("c", Ok("late".into()));
+        assert_eq!(
+            entry.meta.lock().expect("meta").summary_status,
+            SummaryStatus::None
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn pending_summary_fails_after_restart() {
+        let root = temp_root();
+        let store = SessionStore::new(root.clone());
+        store
+            .save(&SessionMeta {
+                status: SessionStatus::Finished,
+                summary_status: SummaryStatus::Pending,
+                ..meta("p")
+            })
+            .expect("save");
+        let sessions = load(&root);
+        let entry = sessions.get("p").expect("entry");
+        assert_eq!(
+            entry.meta.lock().expect("meta").summary_status,
+            SummaryStatus::Failed
+        );
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

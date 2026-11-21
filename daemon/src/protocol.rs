@@ -40,6 +40,25 @@ pub enum ClientMessage {
     SessionInput { id: String, data: String },
     #[serde(rename = "session.resize")]
     SessionResize { id: String, cols: u16, rows: u16 },
+    /// Ends the process and moves the session to the history. Claude sessions
+    /// get a summary when `with_summary` is true.
+    #[serde(rename = "session.finish")]
+    SessionFinish { id: String, with_summary: bool },
+    /// Generates the summary again after a failure.
+    #[serde(rename = "session.summarize")]
+    SessionSummarize { id: String },
+    /// Stops a summary in progress, or gives up on a failed one.
+    #[serde(rename = "session.skipSummary")]
+    SessionSkipSummary { id: String },
+    #[serde(rename = "session.getSummary")]
+    SessionGetSummary { id: String },
+    #[serde(rename = "session.notes")]
+    SessionNotes { id: String, notes: String },
+    #[serde(rename = "session.transcript")]
+    SessionTranscript { id: String },
+    /// Only finished sessions can be deleted.
+    #[serde(rename = "session.delete")]
+    SessionDelete { id: String },
     #[serde(rename = "daemon.shutdown")]
     DaemonShutdown,
     #[serde(rename = "accounts.list")]
@@ -112,6 +131,18 @@ pub enum SessionStatus {
     Exited,
     /// The daemon lost the process, e.g. after a reboot or crash.
     Interrupted,
+    /// Ended by the user and moved to the history.
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SummaryStatus {
+    #[default]
+    None,
+    Pending,
+    Done,
+    Failed,
 }
 
 /// Also the on-disk format of `meta.json`.
@@ -134,6 +165,10 @@ pub struct SessionMeta {
     pub project_id: Option<String>,
     pub claude_config_dir: Option<String>,
     pub ssh_key: Option<String>,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub summary_status: SummaryStatus,
 }
 
 impl SessionStatus {
@@ -172,6 +207,23 @@ pub enum ServerMessage {
     SessionCreated { session: SessionMeta },
     #[serde(rename = "session.updated")]
     SessionUpdated { session: SessionMeta },
+    /// Sent to every client when a summary is ready or fails, and in reply
+    /// to `session.getSummary`.
+    #[serde(rename = "session.summary")]
+    SessionSummary {
+        id: String,
+        status: SummaryStatus,
+        text: Option<String>,
+    },
+    #[serde(rename = "session.deleted")]
+    SessionDeleted { id: String },
+    #[serde(rename = "session.transcript.result")]
+    SessionTranscriptResult {
+        id: String,
+        data: String,
+        /// True when older output was left out.
+        truncated: bool,
+    },
     #[serde(rename = "accounts.list.result")]
     AccountsListResult {
         claude_accounts: Vec<ClaudeAccount>,
@@ -267,6 +319,8 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            notes: String::new(),
+            summary_status: SummaryStatus::None,
         };
         let value = serde_json::to_value(ServerMessage::SessionCreated { session: meta })
             .expect("serialize");
@@ -287,7 +341,9 @@ mod tests {
                     "idleSince": null,
                     "projectId": null,
                     "claudeConfigDir": null,
-                    "sshKey": null
+                    "sshKey": null,
+                    "notes": "",
+                    "summaryStatus": "none"
                 }
             })
         );

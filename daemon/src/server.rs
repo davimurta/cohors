@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -8,7 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Notify, mpsc};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{self, Message};
@@ -17,10 +17,12 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 use crate::accounts;
 use crate::auth::{origin_allowed, token_matches};
 use crate::projects::{Projects, ProjectsError};
+use crate::protocol::SummaryStatus;
 use crate::protocol::{
     Agent, ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage,
 };
 use crate::sessions::{CreateRequest, Sessions};
+use crate::summary;
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTGOING_QUEUE: usize = 256;
@@ -35,6 +37,9 @@ pub struct DaemonState {
     projects: Projects,
     home: PathBuf,
     shutdown_requested: Notify,
+    /// Finish and summary tasks per session, so "finish without summary"
+    /// can cancel them.
+    summaries: Mutex<HashMap<String, AbortHandle>>,
 }
 
 impl DaemonState {
@@ -45,6 +50,7 @@ impl DaemonState {
             projects,
             home,
             shutdown_requested: Notify::new(),
+            summaries: Mutex::new(HashMap::new()),
         }
     }
 
@@ -230,6 +236,57 @@ async fn handle_message(
             Some(entry) => internal_error(entry.session.resize(cols, rows), id),
             None => Some(session_not_found(id)),
         },
+        ClientMessage::SessionFinish { id, with_summary } => {
+            match state.sessions.finish(&id, with_summary) {
+                Ok(meta) => {
+                    let summarize = meta.summary_status == SummaryStatus::Pending;
+                    spawn_finish(state, id, true, summarize);
+                    None
+                }
+                Err(error) => Some(request_error(error.code(), &error, &id)),
+            }
+        }
+        ClientMessage::SessionSummarize { id } => match state.sessions.retry_summary(&id) {
+            Ok(_) => {
+                spawn_finish(state, id, false, true);
+                None
+            }
+            Err(error) => Some(request_error(error.code(), &error, &id)),
+        },
+        ClientMessage::SessionSkipSummary { id } => {
+            if let Ok(mut summaries) = state.summaries.lock()
+                && let Some(task) = summaries.remove(&id)
+            {
+                task.abort();
+            }
+            state
+                .sessions
+                .skip_summary(&id)
+                .err()
+                .map(|error| request_error(error.code(), &error, &id))
+        }
+        ClientMessage::SessionGetSummary { id } => Some(
+            state
+                .sessions
+                .summary(&id)
+                .unwrap_or_else(|error| request_error(error.code(), &error, &id)),
+        ),
+        ClientMessage::SessionNotes { id, notes } => state
+            .sessions
+            .set_notes(&id, notes)
+            .err()
+            .map(|error| request_error(error.code(), &error, &id)),
+        ClientMessage::SessionTranscript { id } => Some(
+            state
+                .sessions
+                .transcript(&id)
+                .unwrap_or_else(|error| request_error(error.code(), &error, &id)),
+        ),
+        ClientMessage::SessionDelete { id } => state
+            .sessions
+            .delete(&id)
+            .err()
+            .map(|error| request_error(error.code(), &error, &id)),
         ClientMessage::DaemonShutdown => {
             // notify_one keeps the request even if main is not waiting yet.
             state.shutdown_requested.notify_one();
@@ -254,6 +311,39 @@ async fn handle_message(
     };
     if let Some(reply) = reply {
         let _ = outgoing.send(reply).await;
+    }
+}
+
+/// Stops the session's process (when `stop` is set) and then generates its
+/// summary (when `summarize` is set), off the connection's task.
+fn spawn_finish(state: &Arc<DaemonState>, id: String, stop: bool, summarize: bool) {
+    let task_state = Arc::clone(state);
+    let task_id = id.clone();
+    let task = tokio::spawn(async move {
+        if stop {
+            let sessions = Arc::clone(&task_state.sessions);
+            let stop_id = task_id.clone();
+            if let Err(error) =
+                tokio::task::spawn_blocking(move || sessions.stop_process(&stop_id)).await
+            {
+                eprintln!("failed to stop session {task_id}: {error}");
+            }
+        }
+        if summarize {
+            let result = match task_state.sessions.summary_launch(&task_id) {
+                Ok(launch) => summary::generate(&launch)
+                    .await
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            };
+            task_state.sessions.summary_finished(&task_id, result);
+        }
+        if let Ok(mut summaries) = task_state.summaries.lock() {
+            summaries.remove(&task_id);
+        }
+    });
+    if let Ok(mut summaries) = state.summaries.lock() {
+        summaries.insert(id, task.abort_handle());
     }
 }
 

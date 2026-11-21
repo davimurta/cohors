@@ -84,7 +84,7 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Agent, SessionStatus};
+    use crate::protocol::{Agent, SessionStatus, SummaryStatus};
 
     fn temp_store() -> (SessionStore, PathBuf) {
         let root = std::env::temp_dir().join(format!("cohors-store-{}", uuid::Uuid::new_v4()));
@@ -106,6 +106,8 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            notes: String::new(),
+            summary_status: SummaryStatus::None,
         }
     }
 
