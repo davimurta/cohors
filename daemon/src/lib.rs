@@ -1,7 +1,11 @@
 pub mod auth;
+pub mod control;
 pub mod daemon_file;
 pub mod executable;
+pub mod instance;
+pub mod login_path;
 pub mod private_fs;
+pub mod process;
 pub mod protocol;
 pub mod ring_buffer;
 pub mod server;

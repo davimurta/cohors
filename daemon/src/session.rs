@@ -1,11 +1,12 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::broadcast;
 
 use crate::ring_buffer::{RingBuffer, Snapshot};
@@ -63,6 +64,9 @@ pub struct Launch {
     pub program: Option<String>,
     pub args: Vec<String>,
     pub cwd: PathBuf,
+    /// PATH for the process, so agents find their tools even when the daemon
+    /// was started with a minimal environment.
+    pub path: Option<std::ffi::OsString>,
 }
 
 /// A live snapshot plus a receiver for every chunk after it.
@@ -95,6 +99,9 @@ impl Output {
 struct Process {
     input: mpsc::Sender<Vec<u8>>,
     master: Box<dyn MasterPty + Send>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    pid: Option<u32>,
+    alive: Arc<AtomicBool>,
 }
 
 /// Terminal output of a session plus the process currently feeding it.
@@ -144,10 +151,15 @@ impl Session {
             .take_writer()
             .map_err(|error| SessionError::OpenPty(error.to_string()))?;
 
+        let killer = child.clone_killer();
+        let pid = child.process_id();
+        let alive = Arc::new(AtomicBool::new(true));
         let output = Arc::clone(&self.output);
+        let reader_alive = Arc::clone(&alive);
         thread::spawn(move || {
             pump_output(reader, &output);
             let exit_code = child.wait().ok().map(|status| status.exit_code());
+            reader_alive.store(false, Ordering::SeqCst);
             on_exit(exit_code);
         });
 
@@ -159,8 +171,46 @@ impl Session {
         *lock(&self.process)? = Some(Process {
             input,
             master: pair.master,
+            killer,
+            pid,
+            alive,
         });
         Ok(())
+    }
+
+    pub fn is_alive(&self) -> bool {
+        lock(&self.process).is_ok_and(|process| {
+            process
+                .as_ref()
+                .is_some_and(|process| process.alive.load(Ordering::SeqCst))
+        })
+    }
+
+    /// Asks the process to end: SIGHUP on Unix, like a closed terminal.
+    /// On Windows this already terminates it.
+    pub fn terminate(&self) {
+        if let Ok(mut process) = lock(&self.process)
+            && let Some(process) = process.as_mut()
+            && process.alive.load(Ordering::SeqCst)
+        {
+            let _ = process.killer.kill();
+        }
+    }
+
+    /// For a process that ignored `terminate`.
+    pub fn force_kill(&self) {
+        let Ok(process) = lock(&self.process) else {
+            return;
+        };
+        if let Some(Process {
+            pid: Some(pid),
+            alive,
+            ..
+        }) = process.as_ref()
+            && alive.load(Ordering::SeqCst)
+        {
+            crate::process::force_kill(*pid);
+        }
     }
 
     /// Snapshot and subscription are taken under the same lock, so the live
@@ -210,6 +260,9 @@ fn command(launch: &Launch) -> CommandBuilder {
     };
     command.args(&launch.args);
     command.cwd(&launch.cwd);
+    if let Some(path) = &launch.path {
+        command.env("PATH", path);
+    }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     for marker in INHERITED_AGENT_MARKERS {
@@ -263,6 +316,7 @@ mod tests {
             program: Some("/bin/sh".into()),
             args: vec!["-c".into(), script.into()],
             cwd: std::env::temp_dir(),
+            path: None,
         }
     }
 
@@ -321,6 +375,18 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("exit reported");
         assert_eq!(code, Some(3));
+    }
+
+    #[test]
+    fn terminate_stops_the_process() {
+        let session = started("sleep 30");
+        assert!(session.is_alive());
+        session.terminate();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.is_alive() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!session.is_alive());
     }
 
     #[test]

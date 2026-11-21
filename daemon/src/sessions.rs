@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-use std::time::SystemTime;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -16,6 +18,8 @@ use crate::store::SessionStore;
 const CLAUDE_COMMAND: &str = "claude";
 const EVENT_QUEUE: usize = 256;
 const RESUME_SEPARATOR: &str = "\r\n\x1b[2m--- sessão retomada ---\x1b[0m\r\n";
+/// How long processes get to exit on their own before a hard kill.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionsError {
@@ -64,6 +68,8 @@ pub struct SessionEntry {
 /// announced on the events channel for all connected clients.
 pub struct Sessions {
     store: SessionStore,
+    /// PATH used to find agents and given to every session process.
+    path: OsString,
     events: broadcast::Sender<ServerMessage>,
     entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
     /// Lets process exit callbacks reach the registry without keeping it alive.
@@ -73,7 +79,7 @@ pub struct Sessions {
 impl Sessions {
     /// Loads saved sessions. Any that were running belonged to a daemon that
     /// is gone, so their processes are lost: they become interrupted.
-    pub fn load(store: SessionStore) -> Arc<Self> {
+    pub fn load(store: SessionStore, path: OsString) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let mut entries = HashMap::new();
         for mut meta in store.load_all() {
@@ -96,6 +102,7 @@ impl Sessions {
         }
         Arc::new_cyclic(|this| Self {
             store,
+            path,
             events,
             entries: Mutex::new(entries),
             this: this.clone(),
@@ -129,7 +136,7 @@ impl Sessions {
             Agent::Claude => Some(Uuid::new_v4().to_string()),
             Agent::Shell => None,
         };
-        let launch = launch_for(request.agent, &cwd, agent_session_id.as_deref(), false)?;
+        let launch = self.launch_for(request.agent, &cwd, agent_session_id.as_deref(), false)?;
         let meta = SessionMeta {
             id: Uuid::new_v4().to_string(),
             name: session_name(request.name.as_deref(), &cwd),
@@ -174,7 +181,7 @@ impl Sessions {
             return Err(SessionsError::InvalidState(meta.status));
         }
         let cwd = existing_dir(&meta.cwd)?;
-        let launch = launch_for(meta.agent, &cwd, meta.agent_session_id.as_deref(), true)?;
+        let launch = self.launch_for(meta.agent, &cwd, meta.agent_session_id.as_deref(), true)?;
         entry.session.write_marker(RESUME_SEPARATOR)?;
         entry.session.start(&launch, self.exit_handler(id))?;
         meta.status = SessionStatus::Running;
@@ -187,6 +194,48 @@ impl Sessions {
             session: updated.clone(),
         });
         Ok(updated)
+    }
+
+    pub fn claude_available(&self) -> bool {
+        executable::find_in(&self.path, CLAUDE_COMMAND).is_some()
+    }
+
+    /// Ends every process for "Encerrar tudo" or a daemon stop. Sessions are
+    /// saved as interrupted first, so they can be resumed later. Blocks for
+    /// up to the grace period.
+    pub fn shutdown(&self) {
+        let entries: Vec<Arc<SessionEntry>> = match self.entries.lock() {
+            Ok(entries) => entries.values().cloned().collect(),
+            Err(_) => return,
+        };
+        for entry in &entries {
+            if let Ok(mut meta) = entry.meta.lock()
+                && meta.status == SessionStatus::Running
+            {
+                mark_interrupted(&mut meta, None);
+                if let Err(error) = self.store.save(&meta) {
+                    eprintln!("failed to save session {}: {error}", meta.id);
+                }
+            }
+            entry.session.terminate();
+        }
+        let deadline = Instant::now() + SHUTDOWN_GRACE;
+        while entries.iter().any(|entry| entry.session.is_alive()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        for entry in &entries {
+            entry.session.force_kill();
+        }
+    }
+
+    fn launch_for(
+        &self,
+        agent: Agent,
+        cwd: &Path,
+        agent_session_id: Option<&str>,
+        resume: bool,
+    ) -> Result<Launch, SessionsError> {
+        launch_for(&self.path, agent, cwd, agent_session_id, resume)
     }
 
     fn exit_handler(&self, id: &str) -> impl FnOnce(Option<u32>) + Send + 'static {
@@ -226,10 +275,6 @@ impl Sessions {
     }
 }
 
-pub fn claude_available() -> bool {
-    executable::find(CLAUDE_COMMAND).is_some()
-}
-
 fn mark_interrupted(meta: &mut SessionMeta, last_activity: Option<SystemTime>) {
     meta.status = SessionStatus::Interrupted;
     let ended = last_activity.map_or_else(OffsetDateTime::now_utc, OffsetDateTime::from);
@@ -246,6 +291,7 @@ fn existing_dir(path: &str) -> Result<PathBuf, SessionsError> {
 }
 
 fn launch_for(
+    path: &OsStr,
     agent: Agent,
     cwd: &Path,
     agent_session_id: Option<&str>,
@@ -253,7 +299,8 @@ fn launch_for(
 ) -> Result<Launch, SessionsError> {
     let (program, args) = match (agent, agent_session_id) {
         (Agent::Claude, Some(id)) => {
-            let program = executable::find(CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
+            let program =
+                executable::find_in(path, CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
             let flag = if resume { "--resume" } else { "--session-id" };
             (
                 Some(program.to_string_lossy().into_owned()),
@@ -266,6 +313,7 @@ fn launch_for(
         program,
         args,
         cwd: cwd.to_path_buf(),
+        path: Some(path.to_os_string()),
     })
 }
 
@@ -295,6 +343,13 @@ mod tests {
 
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!("cohors-sessions-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn load(root: &Path) -> Arc<Sessions> {
+        Sessions::load(
+            SessionStore::new(root.to_path_buf()),
+            std::env::var_os("PATH").unwrap_or_default(),
+        )
     }
 
     fn shell_request(name: &str) -> CreateRequest {
@@ -341,7 +396,9 @@ mod tests {
 
     #[test]
     fn claude_resume_uses_resume_flag() {
-        let Ok(launch) = launch_for(Agent::Claude, Path::new("/tmp"), Some("abc"), true) else {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let Ok(launch) = launch_for(&path, Agent::Claude, Path::new("/tmp"), Some("abc"), true)
+        else {
             return; // claude is not installed on this machine
         };
         assert_eq!(launch.args, ["--resume", "abc"]);
@@ -367,7 +424,7 @@ mod tests {
         meta.status = SessionStatus::Exited;
         store.save(&meta).expect("save");
 
-        let sessions = Sessions::load(SessionStore::new(root.clone()));
+        let sessions = load(&root);
         assert_eq!(status_of(&sessions, "a"), SessionStatus::Interrupted);
         assert_eq!(status_of(&sessions, "b"), SessionStatus::Exited);
         let reloaded = SessionStore::new(root.clone()).load_all();
@@ -379,7 +436,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_folder() {
-        let sessions = Sessions::load(SessionStore::new(temp_root()));
+        let sessions = load(&temp_root());
         let result = sessions.create(CreateRequest {
             agent: Agent::Shell,
             cwd: "/definitely/not/here".into(),
@@ -392,7 +449,7 @@ mod tests {
     #[test]
     fn created_session_is_saved_and_announced() {
         let root = temp_root();
-        let sessions = Sessions::load(SessionStore::new(root.clone()));
+        let sessions = load(&root);
         let mut events = sessions.subscribe();
         let meta = sessions.create(shell_request("build")).expect("create");
         assert_eq!(meta.name, "build");
@@ -408,9 +465,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn shutdown_interrupts_running_sessions() {
+        let root = temp_root();
+        let sessions = load(&root);
+        let meta = sessions.create(shell_request("s")).expect("create");
+        sessions.shutdown();
+        assert_eq!(status_of(&sessions, &meta.id), SessionStatus::Interrupted);
+        assert!(!sessions.get(&meta.id).expect("entry").session.is_alive());
+        let saved = SessionStore::new(root.clone()).load_all();
+        assert_eq!(saved[0].status, SessionStatus::Interrupted);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn exit_marks_session_exited_and_resume_restarts_it() {
         let root = temp_root();
-        let sessions = Sessions::load(SessionStore::new(root.clone()));
+        let sessions = load(&root);
         let meta = sessions.create(shell_request("s")).expect("create");
         let entry = sessions.get(&meta.id).expect("entry");
         entry.session.write_input("exit 4\r").expect("write");

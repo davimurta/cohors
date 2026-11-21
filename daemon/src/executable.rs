@@ -6,10 +6,6 @@ pub fn find_in(path: &OsStr, name: &str) -> Option<PathBuf> {
     std::env::split_paths(path).find_map(|dir| candidate(&dir, name))
 }
 
-pub fn find(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| find_in(&path, name))
-}
-
 #[cfg(unix)]
 fn candidate(dir: &Path, name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;

@@ -39,6 +39,8 @@ pub enum ClientMessage {
     SessionInput { id: String, data: String },
     #[serde(rename = "session.resize")]
     SessionResize { id: String, cols: u16, rows: u16 },
+    #[serde(rename = "daemon.shutdown")]
+    DaemonShutdown,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]

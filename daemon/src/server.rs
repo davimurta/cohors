@@ -6,7 +6,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
@@ -15,7 +15,7 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 
 use crate::auth::{origin_allowed, token_matches};
 use crate::protocol::{ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage};
-use crate::sessions::{CreateRequest, Sessions, SessionsError, claude_available};
+use crate::sessions::{CreateRequest, Sessions, SessionsError};
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTGOING_QUEUE: usize = 256;
@@ -27,11 +27,21 @@ type Outgoing = mpsc::Sender<ServerMessage>;
 pub struct DaemonState {
     token: String,
     sessions: Arc<Sessions>,
+    shutdown_requested: Notify,
 }
 
 impl DaemonState {
     pub fn new(token: String, sessions: Arc<Sessions>) -> Self {
-        Self { token, sessions }
+        Self {
+            token,
+            sessions,
+            shutdown_requested: Notify::new(),
+        }
+    }
+
+    /// Resolves when a client sends `daemon.shutdown`.
+    pub async fn shutdown_requested(&self) {
+        self.shutdown_requested.notified().await;
     }
 }
 
@@ -55,7 +65,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) {
         }
     };
     let (mut sink, mut source) = socket.split();
-    if !handshake(&mut sink, &mut source, &state.token).await {
+    if !handshake(&mut sink, &mut source, &state).await {
         return;
     }
 
@@ -112,7 +122,7 @@ fn check_origin(request: &Request, response: Response) -> Result<Response, Error
 }
 
 /// The first message must be a valid hello, otherwise the connection is closed.
-async fn handshake(sink: &mut Sink, source: &mut Source, token: &str) -> bool {
+async fn handshake(sink: &mut Sink, source: &mut Source, state: &DaemonState) -> bool {
     let first = tokio::time::timeout(HELLO_TIMEOUT, source.next()).await;
     let Ok(Some(Ok(Message::Text(text)))) = first else {
         return false;
@@ -122,7 +132,7 @@ async fn handshake(sink: &mut Sink, source: &mut Source, token: &str) -> bool {
             token: given,
             protocol_version,
         }) => {
-            if !token_matches(token, &given.0) {
+            if !token_matches(&state.token, &given.0) {
                 ServerMessage::error(ErrorCode::Unauthorized, "invalid token", None)
             } else if protocol_version != PROTOCOL_VERSION {
                 ServerMessage::error(
@@ -134,7 +144,7 @@ async fn handshake(sink: &mut Sink, source: &mut Source, token: &str) -> bool {
                 ServerMessage::Ready {
                     protocol_version: PROTOCOL_VERSION,
                     daemon_version: DAEMON_VERSION,
-                    claude_available: claude_available(),
+                    claude_available: state.sessions.claude_available(),
                 }
             }
         }
@@ -210,6 +220,11 @@ async fn handle_message(
             Some(entry) => internal_error(entry.session.resize(cols, rows), id),
             None => Some(session_not_found(id)),
         },
+        ClientMessage::DaemonShutdown => {
+            // notify_one keeps the request even if main is not waiting yet.
+            state.shutdown_requested.notify_one();
+            None
+        }
     };
     if let Some(reply) = reply {
         let _ = outgoing.send(reply).await;
