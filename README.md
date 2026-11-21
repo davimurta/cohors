@@ -10,6 +10,8 @@ Status: early development.
 
 Requirements: Rust (stable), Node.js 24 and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
 
+From the repository root:
+
 ```sh
 # Terminal 1: the daemon (writes its port and token to the user data directory)
 cd daemon && cargo run
