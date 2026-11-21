@@ -1,14 +1,17 @@
+import { BaseDirectory, readTextFile } from '@tauri-apps/plugin-fs';
+
 export interface DaemonConnection {
   port: number;
   token: string;
 }
 
-/** Reads daemon.json through the dev server. Returns null while the daemon is not running. */
+const DAEMON_FILE = 'cohors/daemon.json';
+
+/** Reads the daemon port and token. Returns null while the daemon is not running. */
 export async function loadDaemonConnection(): Promise<DaemonConnection | null> {
   try {
-    const response = await fetch('/daemon.json', { cache: 'no-store' });
-    if (!response.ok) return null;
-    return parseConnection(await response.json());
+    const contents = await readTextFile(DAEMON_FILE, { baseDir: BaseDirectory.Data });
+    return parseConnection(JSON.parse(contents));
   } catch {
     return null;
   }

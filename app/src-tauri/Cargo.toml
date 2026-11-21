@@ -1,0 +1,20 @@
+[package]
+name = "cohors-app"
+version = "0.1.0"
+description = "Cohors desktop app"
+authors = ["Davi Murta"]
+license = "Apache-2.0"
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "cohors_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.7", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
