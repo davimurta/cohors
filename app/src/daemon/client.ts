@@ -16,18 +16,21 @@ type StatusListener = (status: ConnectionStatus) => void;
 export class DaemonClient {
   private socket: WebSocket | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private stopped = true;
+  private status: ConnectionStatus = 'connecting';
+  /** Bumped on start and stop so stale connection attempts give up. */
+  private generation = 0;
   private readonly messageListeners = new Set<MessageListener>();
   private readonly statusListeners = new Set<StatusListener>();
 
   start(): void {
-    this.stopped = false;
-    void this.connect();
+    this.generation += 1;
+    void this.connect(this.generation);
   }
 
   stop(): void {
-    this.stopped = true;
+    this.generation += 1;
     if (this.retryTimer !== null) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
     this.socket?.close();
     this.socket = null;
   }
@@ -48,12 +51,13 @@ export class DaemonClient {
     return () => this.statusListeners.delete(listener);
   }
 
-  private async connect(): Promise<void> {
-    this.setStatus('connecting');
+  private async connect(generation: number): Promise<void> {
+    // Retries stay "disconnected" instead of flickering back to "connecting".
+    if (this.status !== 'disconnected') this.setStatus('connecting');
     const connection = await loadDaemonConnection();
-    if (this.stopped) return;
+    if (generation !== this.generation) return;
     if (connection === null) {
-      this.retry();
+      this.retry(generation);
       return;
     }
 
@@ -71,17 +75,19 @@ export class DaemonClient {
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
-      this.retry();
+      this.retry(generation);
     };
   }
 
-  private retry(): void {
+  private retry(generation: number): void {
+    if (generation !== this.generation) return;
     this.setStatus('disconnected');
-    if (this.stopped) return;
-    this.retryTimer = setTimeout(() => void this.connect(), RETRY_DELAY_MS);
+    this.retryTimer = setTimeout(() => void this.connect(generation), RETRY_DELAY_MS);
   }
 
   private setStatus(status: ConnectionStatus): void {
+    if (status === this.status) return;
+    this.status = status;
     for (const listener of this.statusListeners) listener(status);
   }
 }
