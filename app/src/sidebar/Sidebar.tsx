@@ -4,9 +4,8 @@ import { Button } from '../components/Button.tsx';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { NEW_SESSION_KEYS, NEW_SESSION_SHORTCUT } from '../platform.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
-import { useNow } from '../session/useNow.ts';
 import { useAppStore } from '../state/store.ts';
-import { SessionItem } from './SessionItem.tsx';
+import { SessionList } from './SessionList.tsx';
 import { ShutdownAllButton } from './ShutdownAllButton.tsx';
 import styles from './Sidebar.module.css';
 
@@ -47,7 +46,7 @@ export function Sidebar() {
         icon={<Plus size={16} aria-hidden="true" />}
         aria-keyshortcuts={NEW_SESSION_KEYS}
         disabled={daemonDown}
-        onClick={openNewSession}
+        onClick={() => openNewSession()}
       >
         <span className={styles.newSessionLabel}>Nova sessão</span>
         {!daemonDown && <span className={styles.shortcut}>{NEW_SESSION_SHORTCUT}</span>}
@@ -78,7 +77,6 @@ interface SessionsNavProps {
 }
 
 function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps) {
-  const now = useNow();
   return (
     <>
       <div role="tablist" aria-label="Sessões" className={styles.tabs}>
@@ -90,22 +88,7 @@ function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps)
         </button>
       </div>
 
-      {sessions.length === 0 ? (
-        <p className={styles.empty}>Suas sessões aparecem aqui.</p>
-      ) : (
-        <nav aria-label="Sessões ativas" className={styles.list}>
-          {sessions.map((session) => (
-            <SessionItem
-              key={session.id}
-              session={session}
-              selected={session.id === selectedId}
-              home={home}
-              now={now}
-              onSelect={onSelect}
-            />
-          ))}
-        </nav>
-      )}
+      <SessionList sessions={sessions} selectedId={selectedId} home={home} onSelect={onSelect} />
     </>
   );
 }

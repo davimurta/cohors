@@ -4,24 +4,10 @@
   gap: 20px;
 }
 
-.field {
+.group {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.label {
-  padding: 0;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.optional {
-  font-weight: 400;
-  color: var(--color-text-tertiary);
 }
 
 .agents {
@@ -72,35 +58,9 @@
   color: var(--color-text-secondary);
 }
 
-.folderRow {
-  display: flex;
-  gap: 8px;
-}
-
-.input {
-  height: var(--control-height);
-  padding: 0 12px;
-  border: 1px solid var(--color-border-control);
-  border-radius: var(--radius-control);
-  background: var(--color-surface);
-  font-size: 13.5px;
-}
-
-.folderInput {
-  flex: 1;
-  min-width: 0;
-  background: var(--color-bg-sidebar);
-  font-family: var(--font-mono);
-}
-
-.hint {
-  font-size: 12px;
+.optional {
+  font-weight: 400;
   color: var(--color-text-tertiary);
-}
-
-.error {
-  font-size: 13px;
-  color: var(--color-error-text);
 }
 
 .footer {

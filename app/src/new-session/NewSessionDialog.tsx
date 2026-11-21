@@ -1,9 +1,11 @@
 import { useId, useState, type FormEvent } from 'react';
-import { Check, Folder } from 'lucide-react';
-import { open as openFolderPicker } from '@tauri-apps/plugin-dialog';
+import { Check } from 'lucide-react';
 import type { Agent } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { Dialog } from '../components/Dialog.tsx';
+import field from '../components/Field.module.css';
+import { FolderField } from '../components/FolderField.tsx';
+import { environmentSummary, folderName } from '../projects/labels.ts';
 import { useAppStore } from '../state/store.ts';
 import styles from './NewSessionDialog.module.css';
 
@@ -23,6 +25,7 @@ const AGENT_OPTIONS: AgentOption[] = [
 ];
 
 const CLAUDE_MISSING = 'Não encontrado neste computador';
+const NO_PROJECT = '';
 
 export function NewSessionDialog() {
   const open = useAppStore((state) => state.newSessionOpen);
@@ -40,25 +43,43 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
   const creating = useAppStore((state) => state.creating);
   const createError = useAppStore((state) => state.createError);
   const createSession = useAppStore((state) => state.createSession);
-  const [agent, setAgent] = useState<Agent>(claudeAvailable === false ? 'shell' : 'claude');
-  const [cwd, setCwd] = useState('');
-  const [name, setName] = useState('');
-  const ids = { agent: useId(), folder: useId(), name: useId(), nameHint: useId() };
+  const projects = useAppStore((state) => state.projects);
+  const accounts = useAppStore((state) => state.claudeAccounts);
+  const keys = useAppStore((state) => state.sshKeys);
+  const presetProjectId = useAppStore((state) => state.newSessionProjectId);
 
-  const chooseFolder = async () => {
-    const folder = await openFolderPicker({ directory: true, multiple: false }).catch(() => null);
-    if (typeof folder === 'string') setCwd(folder);
+  const presetProject = projects.find((project) => project.id === presetProjectId);
+  const [agent, setAgent] = useState<Agent>(claudeAvailable === false ? 'shell' : 'claude');
+  const [projectId, setProjectId] = useState(presetProject?.id ?? NO_PROJECT);
+  const [cwd, setCwd] = useState(presetProject?.root ?? '');
+  const [name, setName] = useState('');
+  const ids = {
+    agent: useId(),
+    project: useId(),
+    projectHint: useId(),
+    folder: useId(),
+    name: useId(),
+    nameHint: useId(),
+  };
+  const project = projects.find((candidate) => candidate.id === projectId);
+
+  const changeProject = (nextId: string) => {
+    const next = projects.find((candidate) => candidate.id === nextId);
+    // Follow the project root unless the user picked another folder.
+    if (cwd === '' || cwd === project?.root) setCwd(next?.root ?? '');
+    setProjectId(nextId);
   };
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (cwd !== '' && !creating) createSession({ agent, cwd, name });
+    if (cwd === '' || creating) return;
+    createSession({ agent, cwd, name, projectId: project?.id ?? null });
   };
 
   return (
     <form className={styles.form} onSubmit={submit}>
-      <div className={styles.field} role="group" aria-labelledby={ids.agent}>
-        <span id={ids.agent} className={styles.label}>
+      <div className={styles.group} role="group" aria-labelledby={ids.agent}>
+        <span id={ids.agent} className={field.label}>
           Agente
         </span>
         <div className={styles.agents}>
@@ -77,7 +98,9 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
               >
                 <span className={styles.agentTitle}>
                   {option.title}
-                  {selected && <Check size={16} strokeWidth={2.25} className={styles.check} aria-hidden="true" />}
+                  {selected && (
+                    <Check size={16} strokeWidth={2.25} className={styles.check} aria-hidden="true" />
+                  )}
                 </span>
                 <span className={styles.agentDescription}>
                   {missing ? CLAUDE_MISSING : option.description}
@@ -88,43 +111,60 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
         </div>
       </div>
 
-      <div className={styles.field}>
-        <label htmlFor={ids.folder} className={styles.label}>
-          Pasta
-        </label>
-        <div className={styles.folderRow}>
-          <input
-            id={ids.folder}
-            className={`${styles.input} ${styles.folderInput}`}
-            value={cwd}
-            placeholder="Nenhuma pasta escolhida"
-            readOnly
-          />
-          <Button icon={<Folder size={16} aria-hidden="true" />} onClick={() => void chooseFolder()}>
-            Escolher
-          </Button>
+      {projects.length > 0 && (
+        <div className={field.field}>
+          <label htmlFor={ids.project} className={field.label}>
+            Projeto
+          </label>
+          <select
+            id={ids.project}
+            className={field.control}
+            value={projectId}
+            aria-describedby={ids.projectHint}
+            onChange={(event) => changeProject(event.target.value)}
+          >
+            <option value={NO_PROJECT}>Nenhum</option>
+            {projects.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.name}
+              </option>
+            ))}
+          </select>
+          <span id={ids.projectHint} className={field.hint}>
+            {project === undefined
+              ? 'Sem projeto, a sessão usa a conta padrão do Claude.'
+              : environmentSummary(project, accounts, keys)}
+          </span>
         </div>
-      </div>
+      )}
 
-      <div className={styles.field}>
-        <label htmlFor={ids.name} className={styles.label}>
+      <FolderField
+        id={ids.folder}
+        label="Pasta"
+        value={cwd}
+        {...(project === undefined ? {} : { startIn: project.root })}
+        onChange={setCwd}
+      />
+
+      <div className={field.field}>
+        <label htmlFor={ids.name} className={field.label}>
           Nome <span className={styles.optional}>(opcional)</span>
         </label>
         <input
           id={ids.name}
-          className={styles.input}
+          className={field.control}
           value={name}
-          placeholder={folderName(cwd)}
+          placeholder={cwd === '' ? '' : folderName(cwd)}
           aria-describedby={ids.nameHint}
           onChange={(event) => setName(event.target.value)}
         />
-        <span id={ids.nameHint} className={styles.hint}>
+        <span id={ids.nameHint} className={field.hint}>
           Se ficar em branco, usamos o nome da pasta.
         </span>
       </div>
 
       {createError !== null && (
-        <p role="alert" className={styles.error}>
+        <p role="alert" className={field.error}>
           {createError}
         </p>
       )}
@@ -137,8 +177,4 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
       </div>
     </form>
   );
-}
-
-function folderName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? '';
 }

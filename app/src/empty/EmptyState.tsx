@@ -36,7 +36,7 @@ export function EmptyState() {
           variant="primary"
           size="large"
           icon={<Plus size={16} aria-hidden="true" />}
-          onClick={openNewSession}
+          onClick={() => openNewSession()}
         >
           Nova sessão
         </Button>

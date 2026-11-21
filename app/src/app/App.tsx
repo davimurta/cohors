@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { DaemonErrorScreen } from '../daemon-error/DaemonErrorScreen.tsx';
 import { EmptyState } from '../empty/EmptyState.tsx';
 import { NewSessionDialog } from '../new-session/NewSessionDialog.tsx';
+import { ProjectDialog } from '../projects/ProjectDialog.tsx';
 import { SessionView } from '../session/SessionView.tsx';
 import { Sidebar } from '../sidebar/Sidebar.tsx';
 import { startDaemonSync, useAppStore } from '../state/store.ts';
@@ -40,6 +41,7 @@ export function App() {
         </>
       )}
       <NewSessionDialog />
+      <ProjectDialog />
     </div>
   );
 }

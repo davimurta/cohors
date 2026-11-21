@@ -19,6 +19,9 @@ function meta(id: string): SessionMeta {
     createdAt: '2026-01-01T00:00:00Z',
     endedAt: null,
     idleSince: null,
+    projectId: null,
+    claudeConfigDir: null,
+    sshKey: null,
   };
 }
 
@@ -149,6 +152,36 @@ describe('resume', () => {
     );
     expect(state.resumingId).toBeNull();
     expect(state.resumeError).toBe('A pasta desta sessão não existe mais.');
+  });
+});
+
+describe('projects', () => {
+  const project = { id: 'p', name: 'api', root: '/dev/api', claudeConfigDir: null, sshKey: null };
+
+  it('closes the dialog once the save is confirmed', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), projectDialog: { projectId: null }, savingProject: true },
+      { type: 'project.list.result', projects: [project] },
+    );
+    expect(state.projects).toEqual([project]);
+    expect(state.projectDialog).toBeNull();
+  });
+
+  it('keeps the dialog open when another client changes projects', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), projectDialog: { projectId: null } },
+      { type: 'project.list.result', projects: [project] },
+    );
+    expect(state.projectDialog).not.toBeNull();
+  });
+
+  it('shows a save error in the dialog', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), projectDialog: { projectId: 'p' }, savingProject: true },
+      { type: 'error', code: 'invalid_cwd', message: 'folder does not exist', ref: 'p' },
+    );
+    expect(state.savingProject).toBe(false);
+    expect(state.projectError).toBe('A pasta raiz não existe. Escolha outra.');
   });
 });
 

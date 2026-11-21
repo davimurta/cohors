@@ -46,6 +46,18 @@ Each session lives in `sessions/<id>/` under the user data directory: `meta.json
 - On startup the daemon has no processes, so sessions saved as `running` or `idle` become `interrupted`, with `endedAt` set to the transcript's last write.
 - Resuming keeps the session's output buffer, so attached clients keep streaming without re-attaching.
 
+## Projects
+
+A project groups sessions and gives them a root folder, a Claude account and an SSH key. Projects are saved in `projects.json` in the user data directory.
+
+| Client message | Effect |
+| --- | --- |
+| `accounts.list` | Replies `accounts.list.result {claudeAccounts, sshKeys}`: the default Claude account plus every `~/.claude*` folder with a logged-in account (email and organization read from its `.claude.json`), and private keys in `~/.ssh` that have a `.pub` pair. Tokens and key contents are never read |
+| `project.list` | Replies `project.list.result {projects}` |
+| `project.create {project}` / `project.update {id, project}` / `project.delete {id}` | Every client receives the new `project.list.result`. The root must exist, and the account and key must be ones `accounts.list` returns |
+
+`session.create {projectId}` copies the project's account and key into the session. Its processes run with `CLAUDE_CONFIG_DIR` set to the account folder (removed for the default account) and, when a key is set, `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes"`. Shells get the same variables. Resume reuses the values stored in the session, so later project edits do not move a conversation to another account. Deleting a project leaves its sessions untouched.
+
 ## Terminal state on attach
 
 When the ring buffer drops old output, the modes that output had set (alternate screen, bracketed paste, mouse, cursor visibility, keyboard protocol) are re-emitted at the start of the snapshot. After a snapshot, the client resizes the PTY one row smaller and back, since the kernel only signals a size change, so the agent repaints its screen.
