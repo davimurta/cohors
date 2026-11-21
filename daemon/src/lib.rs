@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod daemon_file;
 pub mod executable;
+pub mod private_fs;
 pub mod protocol;
 pub mod ring_buffer;
 pub mod server;
