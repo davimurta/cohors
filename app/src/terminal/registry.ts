@@ -110,10 +110,20 @@ export function startTerminalRouting(): () => void {
   return daemon.onMessage((message) => {
     if (message.type === 'session.list.result') {
       syncWithSessions(new Set(message.sessions.map((session) => session.id)));
+    } else if (message.type === 'session.updated' && message.session.status === 'finished') {
+      // A finished session never runs again.
+      disposeTerminal(message.session.id);
+    } else if (message.type === 'session.deleted') {
+      disposeTerminal(message.id);
     } else if (message.type === 'session.snapshot' || message.type === 'session.output') {
       terminals.get(message.id)?.receive(message);
     }
   });
+}
+
+function disposeTerminal(id: string): void {
+  terminals.get(id)?.dispose();
+  terminals.delete(id);
 }
 
 /** Drops terminals of sessions the daemon no longer has, re-attaches the rest. */

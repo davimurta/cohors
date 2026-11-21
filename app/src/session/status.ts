@@ -5,6 +5,7 @@ export const STATUS_LABEL: Record<SessionStatus, string> = {
   idle: 'Ociosa',
   exited: 'Encerrada',
   interrupted: 'Interrompida',
+  finished: 'Finalizada',
 };
 
 /** Running or idle: the session has a live process and a terminal. */

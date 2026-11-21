@@ -9,6 +9,15 @@ import type {
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { isLive } from '../session/status.ts';
 
+export type SidebarTab = 'active' | 'finished';
+
+export interface TranscriptView {
+  id: string;
+  /** null while loading. */
+  data: string | null;
+  truncated: boolean;
+}
+
 export interface SessionsState {
   connection: ConnectionStatus;
   /** Technical reason shown on the daemon error screens. */
@@ -17,6 +26,12 @@ export interface SessionsState {
   claudeAvailable: boolean | null;
   sessions: SessionMeta[];
   selectedId: string | null;
+  sidebarTab: SidebarTab;
+  /** Summary text by session id, loaded when a finished session is opened. */
+  summaries: Record<string, string | null>;
+  transcript: TranscriptView | null;
+  /** Session whose notes dialog is open. */
+  notesId: string | null;
   projects: Project[];
   claudeAccounts: ClaudeAccount[];
   sshKeys: SshKey[];
@@ -40,6 +55,10 @@ export const initialSessionsState: SessionsState = {
   claudeAvailable: null,
   sessions: [],
   selectedId: null,
+  sidebarTab: 'active',
+  summaries: {},
+  transcript: null,
+  notesId: null,
   projects: [],
   claudeAccounts: [],
   sshKeys: [],
@@ -87,6 +106,16 @@ export function applyServerMessage(state: SessionsState, message: ServerMessage)
       return sessionCreated(state, message.session);
     case 'session.updated':
       return sessionUpdated(state, message.session);
+    case 'session.summary':
+      return { ...state, summaries: { ...state.summaries, [message.id]: message.text } };
+    case 'session.deleted':
+      return sessionDeleted(state, message.id);
+    case 'session.transcript.result':
+      if (state.transcript?.id !== message.id) return state;
+      return {
+        ...state,
+        transcript: { id: message.id, data: message.data, truncated: message.truncated },
+      };
     case 'accounts.list.result':
       return { ...state, claudeAccounts: message.claudeAccounts, sshKeys: message.sshKeys };
     case 'project.list.result':
@@ -122,6 +151,28 @@ export function applyConnectionStatus(
     resumingId: null,
     savingProject: false,
   };
+}
+
+function sessionDeleted(state: SessionsState, id: string): SessionsState {
+  const sessions = state.sessions.filter((session) => session.id !== id);
+  const { [id]: _removed, ...summaries } = state.summaries;
+  return {
+    ...state,
+    sessions,
+    summaries,
+    selectedId:
+      state.selectedId === id ? firstInTab(sessions, state.sidebarTab) : state.selectedId,
+    transcript: state.transcript?.id === id ? null : state.transcript,
+    notesId: state.notesId === id ? null : state.notesId,
+  };
+}
+
+export function inTab(session: SessionMeta, tab: SidebarTab): boolean {
+  return (session.status === 'finished') === (tab === 'finished');
+}
+
+export function firstInTab(sessions: SessionMeta[], tab: SidebarTab): string | null {
+  return sessions.find((session) => inTab(session, tab))?.id ?? null;
 }
 
 function sessionUpdated(state: SessionsState, updated: SessionMeta): SessionsState {
@@ -176,5 +227,5 @@ function keepSelection(selectedId: string | null, sessions: SessionMeta[]): stri
   if (selectedId !== null && sessions.some((session) => session.id === selectedId)) {
     return selectedId;
   }
-  return sessions[0]?.id ?? null;
+  return firstInTab(sessions, 'active');
 }

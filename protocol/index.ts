@@ -7,8 +7,11 @@ export type Agent = 'claude' | 'shell';
 /**
  * `idle`: running without output for a while. `exited`: the process ended on
  * its own. `interrupted`: the daemon lost it (reboot, crash, shutdown).
+ * `finished`: ended by the user and moved to the history.
  */
-export type SessionStatus = 'running' | 'idle' | 'exited' | 'interrupted';
+export type SessionStatus = 'running' | 'idle' | 'exited' | 'interrupted' | 'finished';
+
+export type SummaryStatus = 'none' | 'pending' | 'done' | 'failed';
 
 export interface SessionMeta {
   id: string;
@@ -27,6 +30,8 @@ export interface SessionMeta {
   projectId: string | null;
   claudeConfigDir: string | null;
   sshKey: string | null;
+  notes: string;
+  summaryStatus: SummaryStatus;
 }
 
 /** Editable part of a project. */
@@ -75,6 +80,13 @@ export type ClientMessage =
   | { type: 'session.detach'; id: string }
   | { type: 'session.input'; id: string; data: string }
   | { type: 'session.resize'; id: string; cols: number; rows: number }
+  | { type: 'session.finish'; id: string; withSummary: boolean }
+  | { type: 'session.summarize'; id: string }
+  | { type: 'session.skipSummary'; id: string }
+  | { type: 'session.getSummary'; id: string }
+  | { type: 'session.notes'; id: string; notes: string }
+  | { type: 'session.transcript'; id: string }
+  | { type: 'session.delete'; id: string }
   | { type: 'daemon.shutdown' }
   | { type: 'accounts.list' }
   | { type: 'project.list' }
@@ -87,6 +99,9 @@ export type ServerMessage =
   | { type: 'session.list.result'; sessions: SessionMeta[] }
   | { type: 'session.created'; session: SessionMeta }
   | { type: 'session.updated'; session: SessionMeta }
+  | { type: 'session.summary'; id: string; status: SummaryStatus; text: string | null }
+  | { type: 'session.deleted'; id: string }
+  | { type: 'session.transcript.result'; id: string; data: string; truncated: boolean }
   | { type: 'accounts.list.result'; claudeAccounts: ClaudeAccount[]; sshKeys: SshKey[] }
   | { type: 'project.list.result'; projects: Project[] }
   | { type: 'session.snapshot'; id: string; seq: number; data: string }

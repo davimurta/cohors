@@ -4,8 +4,11 @@ import { DaemonClient } from '../daemon/client.ts';
 import {
   applyConnectionStatus,
   applyServerMessage,
+  firstInTab,
+  inTab,
   initialSessionsState,
   type SessionsState,
+  type SidebarTab,
 } from './sessions.ts';
 
 export const daemon = new DaemonClient();
@@ -27,6 +30,17 @@ interface SessionsActions {
   restartDaemon: () => void;
   /** "Encerrar tudo": the daemon stops every session and exits. */
   shutdownDaemon: () => void;
+  setSidebarTab: (tab: SidebarTab) => void;
+  finishSession: (id: string, withSummary: boolean) => void;
+  retrySummary: (id: string) => void;
+  skipSummary: (id: string) => void;
+  loadSummary: (id: string) => void;
+  openNotes: (id: string) => void;
+  closeNotes: () => void;
+  saveNotes: (id: string, notes: string) => void;
+  openTranscript: (id: string) => void;
+  closeTranscript: () => void;
+  deleteSession: (id: string) => void;
   openProjectDialog: (projectId: string | null) => void;
   closeProjectDialog: () => void;
   saveProject: (settings: ProjectSettings) => void;
@@ -35,7 +49,7 @@ interface SessionsActions {
 
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
   ...initialSessionsState,
-  select: (id) => set({ selectedId: id, resumeError: null }),
+  select: (id) => set({ selectedId: id, resumeError: null, transcript: null }),
   openNewSession: (projectId) =>
     set({ newSessionOpen: true, newSessionProjectId: projectId ?? null, createError: null }),
   closeNewSession: () => set({ newSessionOpen: false, creating: false, createError: null }),
@@ -64,6 +78,38 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   retryConnection: () => daemon.retryNow(),
   restartDaemon: () => void daemon.restartDaemon(),
   shutdownDaemon: () => daemon.send({ type: 'daemon.shutdown' }),
+  setSidebarTab: (tab) => {
+    const { sessions, selectedId } = get();
+    const selected = sessions.find((session) => session.id === selectedId);
+    const keep = selected !== undefined && inTab(selected, tab);
+    set({
+      sidebarTab: tab,
+      selectedId: keep ? selectedId : firstInTab(sessions, tab),
+      transcript: null,
+    });
+  },
+  finishSession: (id, withSummary) => {
+    // The session moves to the history; follow it there.
+    set({ sidebarTab: 'finished', selectedId: id, transcript: null });
+    daemon.send({ type: 'session.finish', id, withSummary });
+  },
+  retrySummary: (id) => daemon.send({ type: 'session.summarize', id }),
+  skipSummary: (id) => daemon.send({ type: 'session.skipSummary', id }),
+  loadSummary: (id) => {
+    if (!(id in get().summaries)) daemon.send({ type: 'session.getSummary', id });
+  },
+  openNotes: (id) => set({ notesId: id }),
+  closeNotes: () => set({ notesId: null }),
+  saveNotes: (id, notes) => {
+    daemon.send({ type: 'session.notes', id, notes });
+    set({ notesId: null });
+  },
+  openTranscript: (id) => {
+    set({ transcript: { id, data: null, truncated: false } });
+    daemon.send({ type: 'session.transcript', id });
+  },
+  closeTranscript: () => set({ transcript: null }),
+  deleteSession: (id) => daemon.send({ type: 'session.delete', id }),
   openProjectDialog: (projectId) => {
     // Accounts and keys may have changed since the app started.
     daemon.send({ type: 'accounts.list' });

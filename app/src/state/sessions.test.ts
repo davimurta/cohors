@@ -22,6 +22,8 @@ function meta(id: string): SessionMeta {
     projectId: null,
     claudeConfigDir: null,
     sshKey: null,
+    notes: '',
+    summaryStatus: 'none',
   };
 }
 
@@ -182,6 +184,55 @@ describe('projects', () => {
     );
     expect(state.savingProject).toBe(false);
     expect(state.projectError).toBe('A pasta raiz não existe. Escolha outra.');
+  });
+});
+
+describe('history', () => {
+  it('caches summaries by session', () => {
+    const state = applyServerMessage(withSessions(['a']), {
+      type: 'session.summary',
+      id: 'a',
+      status: 'done',
+      text: '## O que foi feito',
+    });
+    expect(state.summaries).toEqual({ a: '## O que foi feito' });
+  });
+
+  it('selects the next finished session after a delete', () => {
+    const finished = (id: string) => ({ ...meta(id), status: 'finished' as const });
+    const state = applyServerMessage(
+      {
+        ...withSessions([]),
+        sessions: [meta('live'), finished('a'), finished('b')],
+        sidebarTab: 'finished',
+        selectedId: 'a',
+        summaries: { a: 'x' },
+        transcript: { id: 'a', data: null, truncated: false },
+      },
+      { type: 'session.deleted', id: 'a' },
+    );
+    expect(state.sessions.map((session) => session.id)).toEqual(['live', 'b']);
+    expect(state.selectedId).toBe('b');
+    expect(state.summaries).toEqual({});
+    expect(state.transcript).toBeNull();
+  });
+
+  it('only accepts the transcript that was asked for', () => {
+    const asked = { ...withSessions(['a']), transcript: { id: 'a', data: null, truncated: false } };
+    const loaded = applyServerMessage(asked, {
+      type: 'session.transcript.result',
+      id: 'a',
+      data: 'log',
+      truncated: true,
+    });
+    expect(loaded.transcript).toEqual({ id: 'a', data: 'log', truncated: true });
+    const other = applyServerMessage(asked, {
+      type: 'session.transcript.result',
+      id: 'b',
+      data: 'x',
+      truncated: false,
+    });
+    expect(other.transcript?.data).toBeNull();
   });
 });
 
