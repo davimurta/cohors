@@ -129,6 +129,28 @@ describe('applyServerMessage', () => {
   });
 });
 
+describe('resume', () => {
+  const exited = { ...meta('a'), status: 'exited' as const, exitCode: 1 };
+
+  it('clears the pending resume once the session runs again', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), sessions: [exited], resumingId: 'a' },
+      { type: 'session.updated', session: { ...exited, status: 'running', exitCode: null } },
+    );
+    expect(state.resumingId).toBeNull();
+    expect(state.sessions[0]?.status).toBe('running');
+  });
+
+  it('turns a resume error into a readable message', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), sessions: [exited], resumingId: 'a' },
+      { type: 'error', code: 'invalid_cwd', message: 'folder does not exist', ref: 'a' },
+    );
+    expect(state.resumingId).toBeNull();
+    expect(state.resumeError).toBe('A pasta desta sessão não existe mais.');
+  });
+});
+
 describe('applyConnectionStatus', () => {
   it('cancels a pending creation when the connection drops', () => {
     const state = applyConnectionStatus(withSessions([], { creating: true }), 'disconnected');

@@ -19,6 +19,27 @@ export function formatElapsed(since: string, now: number): string {
   return `há ${days} ${days === 1 ? 'dia' : 'dias'}`;
 }
 
+/** "hoje, 18:42", "ontem, 09:05" or "12/11, 18:42" (with the year if not the current one). */
+export function formatLastActivity(at: string, now: number): string {
+  const date = new Date(at);
+  const today = new Date(now);
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const dayDiff = Math.round((startOfDay(today) - startOfDay(date)) / DAY_MS);
+  if (dayDiff === 0) return `hoje, ${time}`;
+  if (dayDiff === 1) return `ontem, ${time}`;
+  const day = `${pad(date.getDate())}/${pad(date.getMonth() + 1)}`;
+  const year = date.getFullYear() === today.getFullYear() ? '' : `/${date.getFullYear()}`;
+  return `${day}${year}, ${time}`;
+}
+
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
 /** Shortens paths inside the home folder to "~/...". */
 export function displayPath(path: string, home: string | null): string {
   if (home === null || home === '') return path;

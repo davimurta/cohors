@@ -40,6 +40,8 @@ class SessionTerminal {
     }
     this.visible = true;
     this.fitToHost();
+    // A resumed process starts at the PTY default size, so always report ours.
+    this.sendResize();
     this.terminal.focus();
   }
 

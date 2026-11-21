@@ -10,6 +10,9 @@ export interface SessionsState {
   newSessionOpen: boolean;
   creating: boolean;
   createError: string | null;
+  /** Session whose resume request is waiting for the daemon. */
+  resumingId: string | null;
+  resumeError: string | null;
 }
 
 export const initialSessionsState: SessionsState = {
@@ -20,6 +23,8 @@ export const initialSessionsState: SessionsState = {
   newSessionOpen: false,
   creating: false,
   createError: null,
+  resumingId: null,
+  resumeError: null,
 };
 
 const CREATE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -27,6 +32,12 @@ const CREATE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   agent_not_found: 'Claude Code não encontrado. Instale o CLI ou escolha Shell.',
 };
 const CREATE_ERROR_FALLBACK = 'Não foi possível criar a sessão.';
+
+const RESUME_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  invalid_cwd: 'A pasta desta sessão não existe mais.',
+  agent_not_found: 'Claude Code não encontrado. Instale o CLI para retomar esta sessão.',
+};
+const RESUME_ERROR_FALLBACK = 'Não foi possível retomar a sessão.';
 
 /** Applies a daemon message to the state. Pure, so it can be tested alone. */
 export function applyServerMessage(state: SessionsState, message: ServerMessage): SessionsState {
@@ -42,19 +53,9 @@ export function applyServerMessage(state: SessionsState, message: ServerMessage)
     case 'session.created':
       return sessionCreated(state, message.session);
     case 'session.updated':
-      return {
-        ...state,
-        sessions: state.sessions.map((session) =>
-          session.id === message.session.id ? message.session : session,
-        ),
-      };
+      return sessionUpdated(state, message.session);
     case 'error':
-      if (message.ref !== 'session.create') return state;
-      return {
-        ...state,
-        creating: false,
-        createError: CREATE_ERROR_MESSAGES[message.code] ?? CREATE_ERROR_FALLBACK,
-      };
+      return requestFailed(state, message.code, message.ref);
     case 'session.snapshot':
     case 'session.output':
       return state;
@@ -65,9 +66,35 @@ export function applyConnectionStatus(
   state: SessionsState,
   connection: ConnectionStatus,
 ): SessionsState {
-  // A create in flight is lost with the connection.
-  const creating = connection === 'ready' ? state.creating : false;
-  return { ...state, connection, creating };
+  if (connection === 'ready') return { ...state, connection };
+  // Requests in flight are lost with the connection.
+  return { ...state, connection, creating: false, resumingId: null };
+}
+
+function sessionUpdated(state: SessionsState, updated: SessionMeta): SessionsState {
+  const sessions = state.sessions.map((session) => (session.id === updated.id ? updated : session));
+  if (state.resumingId !== updated.id || updated.status !== 'running') {
+    return { ...state, sessions };
+  }
+  return { ...state, sessions, resumingId: null, resumeError: null };
+}
+
+function requestFailed(state: SessionsState, code: ErrorCode, ref?: string): SessionsState {
+  if (ref === 'session.create') {
+    return {
+      ...state,
+      creating: false,
+      createError: CREATE_ERROR_MESSAGES[code] ?? CREATE_ERROR_FALLBACK,
+    };
+  }
+  if (ref !== undefined && ref === state.resumingId) {
+    return {
+      ...state,
+      resumingId: null,
+      resumeError: RESUME_ERROR_MESSAGES[code] ?? RESUME_ERROR_FALLBACK,
+    };
+  }
+  return state;
 }
 
 function sessionCreated(state: SessionsState, session: SessionMeta): SessionsState {

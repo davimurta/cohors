@@ -21,11 +21,12 @@ interface SessionsActions {
   openNewSession: () => void;
   closeNewSession: () => void;
   createSession: (request: CreateSessionRequest) => void;
+  resumeSession: (id: string) => void;
 }
 
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
   ...initialSessionsState,
-  select: (id) => set({ selectedId: id }),
+  select: (id) => set({ selectedId: id, resumeError: null }),
   openNewSession: () => set({ newSessionOpen: true, createError: null }),
   closeNewSession: () => set({ newSessionOpen: false, creating: false, createError: null }),
   createSession: ({ agent, cwd, name }) => {
@@ -35,6 +36,14 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
     }
     set({ creating: true, createError: null });
     daemon.send({ type: 'session.create', agent, cwd, name });
+  },
+  resumeSession: (id) => {
+    if (get().connection !== 'ready') {
+      set({ resumeError: 'O daemon está desconectado.' });
+      return;
+    }
+    set({ resumingId: id, resumeError: null });
+    daemon.send({ type: 'session.resume', id });
   },
 }));
 
