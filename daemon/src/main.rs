@@ -7,6 +7,8 @@ use std::sync::Arc;
 use cohors_daemon::auth::generate_token;
 use cohors_daemon::daemon_file::{self, DaemonFile};
 use cohors_daemon::server::{self, DaemonState};
+use cohors_daemon::sessions::Sessions;
+use cohors_daemon::store::SessionStore;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -22,6 +24,7 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Box<dyn Error>> {
     let data_dir = daemon_file::data_dir().ok_or("no user data directory")?;
+    let sessions = Sessions::load(SessionStore::new(data_dir.join("sessions")));
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let port = listener.local_addr()?.port();
     let token = generate_token()?;
@@ -34,7 +37,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     )?;
     eprintln!("listening on 127.0.0.1:{port}");
 
-    let state = Arc::new(DaemonState::new(token));
+    let state = Arc::new(DaemonState::new(token, sessions));
     tokio::select! {
         () = server::serve(listener, state) => {}
         signal = tokio::signal::ctrl_c() => signal?,

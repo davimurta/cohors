@@ -7,5 +7,6 @@ pub mod ring_buffer;
 pub mod server;
 pub mod session;
 pub mod sessions;
+pub mod store;
 pub mod terminal_modes;
 pub mod utf8;

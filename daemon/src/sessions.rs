@@ -1,36 +1,49 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::SystemTime;
 
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::executable;
-use crate::protocol::{Agent, ErrorCode, SessionMeta, SessionStatus};
+use crate::protocol::{Agent, ErrorCode, ServerMessage, SessionMeta, SessionStatus};
 use crate::session::{Launch, Session, SessionError};
+use crate::store::SessionStore;
 
 const CLAUDE_COMMAND: &str = "claude";
+const EVENT_QUEUE: usize = 256;
+const RESUME_SEPARATOR: &str = "\r\n\x1b[2m--- sessão retomada ---\x1b[0m\r\n";
 
 #[derive(Debug, thiserror::Error)]
-pub enum CreateError {
+pub enum SessionsError {
     #[error("folder does not exist: {0}")]
     InvalidCwd(String),
     #[error("claude was not found in PATH")]
     AgentNotFound,
+    #[error("session not found")]
+    NotFound,
+    #[error("session is {0:?}")]
+    InvalidState(SessionStatus),
     #[error(transparent)]
     Session(#[from] SessionError),
+    #[error("failed to save session: {0}")]
+    Io(#[from] std::io::Error),
     #[error("failed to format timestamp: {0}")]
     Timestamp(#[from] time::error::Format),
     #[error("session registry lock poisoned")]
     Poisoned,
 }
 
-impl CreateError {
+impl SessionsError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidCwd(_) => ErrorCode::InvalidCwd,
             Self::AgentNotFound => ErrorCode::AgentNotFound,
+            Self::NotFound => ErrorCode::SessionNotFound,
+            Self::InvalidState(_) => ErrorCode::InvalidState,
             _ => ErrorCode::Internal,
         }
     }
@@ -43,23 +56,65 @@ pub struct CreateRequest {
 }
 
 pub struct SessionEntry {
-    pub meta: SessionMeta,
+    meta: Mutex<SessionMeta>,
     pub session: Session,
 }
 
-#[derive(Default)]
+/// Every session the daemon knows, persisted in the store. Changes are
+/// announced on the events channel for all connected clients.
 pub struct Sessions {
+    store: SessionStore,
+    events: broadcast::Sender<ServerMessage>,
     entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
+    /// Lets process exit callbacks reach the registry without keeping it alive.
+    this: Weak<Sessions>,
 }
 
 impl Sessions {
+    /// Loads saved sessions. Any that were running belonged to a daemon that
+    /// is gone, so their processes are lost: they become interrupted.
+    pub fn load(store: SessionStore) -> Arc<Self> {
+        let (events, _) = broadcast::channel(EVENT_QUEUE);
+        let mut entries = HashMap::new();
+        for mut meta in store.load_all() {
+            if meta.status == SessionStatus::Running {
+                let last_activity = store.transcript_modified(&meta.id);
+                mark_interrupted(&mut meta, last_activity);
+                if let Err(error) = store.save(&meta) {
+                    eprintln!("failed to save session {}: {error}", meta.id);
+                }
+            }
+            let transcript = store
+                .open_transcript(&meta.id)
+                .map_err(|error| eprintln!("failed to open transcript {}: {error}", meta.id))
+                .ok();
+            let entry = SessionEntry {
+                meta: Mutex::new(meta.clone()),
+                session: Session::new(transcript),
+            };
+            entries.insert(meta.id, Arc::new(entry));
+        }
+        Arc::new_cyclic(|this| Self {
+            store,
+            events,
+            entries: Mutex::new(entries),
+            this: this.clone(),
+        })
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ServerMessage> {
+        self.events.subscribe()
+    }
+
     /// Sessions in creation order.
     pub fn list(&self) -> Vec<SessionMeta> {
         let Ok(entries) = self.entries.lock() else {
             return Vec::new();
         };
-        let mut sessions: Vec<SessionMeta> =
-            entries.values().map(|entry| entry.meta.clone()).collect();
+        let mut sessions: Vec<SessionMeta> = entries
+            .values()
+            .filter_map(|entry| entry.meta.lock().ok().map(|meta| meta.clone()))
+            .collect();
         sessions.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         sessions
     }
@@ -68,18 +123,13 @@ impl Sessions {
         self.entries.lock().ok()?.get(id).cloned()
     }
 
-    pub fn create(&self, request: CreateRequest) -> Result<SessionMeta, CreateError> {
-        let cwd = PathBuf::from(&request.cwd);
-        if !cwd.is_dir() {
-            return Err(CreateError::InvalidCwd(request.cwd));
-        }
+    pub fn create(&self, request: CreateRequest) -> Result<SessionMeta, SessionsError> {
+        let cwd = existing_dir(&request.cwd)?;
         let agent_session_id = match request.agent {
             Agent::Claude => Some(Uuid::new_v4().to_string()),
             Agent::Shell => None,
         };
-        let launch = launch_for(request.agent, &cwd, agent_session_id.as_deref())?;
-        let session = Session::new(None);
-        session.start(&launch, |_| {})?;
+        let launch = launch_for(request.agent, &cwd, agent_session_id.as_deref(), false)?;
         let meta = SessionMeta {
             id: Uuid::new_v4().to_string(),
             name: session_name(request.name.as_deref(), &cwd),
@@ -87,17 +137,92 @@ impl Sessions {
             cwd: request.cwd,
             agent_session_id,
             status: SessionStatus::Running,
-            created_at: OffsetDateTime::now_utc().format(&Rfc3339)?,
+            exit_code: None,
+            created_at: now()?,
+            ended_at: None,
         };
+        let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
+        let started = session
+            .start(&launch, self.exit_handler(&meta.id))
+            .map_err(SessionsError::from)
+            .and_then(|()| self.store.save(&meta).map_err(SessionsError::from));
+        if let Err(error) = started {
+            // Nothing should remain of a session that never started.
+            let _ = self.store.remove(&meta.id);
+            return Err(error);
+        }
         let entry = Arc::new(SessionEntry {
-            meta: meta.clone(),
+            meta: Mutex::new(meta.clone()),
             session,
         });
-        self.entries
-            .lock()
-            .map_err(|_| CreateError::Poisoned)?
-            .insert(meta.id.clone(), entry);
+        lock(&self.entries)?.insert(meta.id.clone(), entry);
+        self.announce(ServerMessage::SessionCreated {
+            session: meta.clone(),
+        });
         Ok(meta)
+    }
+
+    /// Starts a new process for an exited or interrupted session: Claude
+    /// continues its conversation, a shell starts fresh in the same folder.
+    pub fn resume(&self, id: &str) -> Result<SessionMeta, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let mut meta = lock(&entry.meta)?;
+        if !matches!(
+            meta.status,
+            SessionStatus::Exited | SessionStatus::Interrupted
+        ) {
+            return Err(SessionsError::InvalidState(meta.status));
+        }
+        let cwd = existing_dir(&meta.cwd)?;
+        let launch = launch_for(meta.agent, &cwd, meta.agent_session_id.as_deref(), true)?;
+        entry.session.write_marker(RESUME_SEPARATOR)?;
+        entry.session.start(&launch, self.exit_handler(id))?;
+        meta.status = SessionStatus::Running;
+        meta.exit_code = None;
+        meta.ended_at = None;
+        self.store.save(&meta)?;
+        let updated = meta.clone();
+        drop(meta);
+        self.announce(ServerMessage::SessionUpdated {
+            session: updated.clone(),
+        });
+        Ok(updated)
+    }
+
+    fn exit_handler(&self, id: &str) -> impl FnOnce(Option<u32>) + Send + 'static {
+        let sessions = self.this.clone();
+        let id = id.to_owned();
+        move |exit_code| {
+            if let Some(sessions) = sessions.upgrade() {
+                sessions.process_exited(&id, exit_code);
+            }
+        }
+    }
+
+    fn process_exited(&self, id: &str, exit_code: Option<u32>) {
+        let Some(entry) = self.get(id) else {
+            return;
+        };
+        let Ok(mut meta) = entry.meta.lock() else {
+            return;
+        };
+        if meta.status != SessionStatus::Running {
+            return;
+        }
+        meta.status = SessionStatus::Exited;
+        meta.exit_code = exit_code;
+        meta.ended_at = now().ok();
+        if let Err(error) = self.store.save(&meta) {
+            eprintln!("failed to save session {id}: {error}");
+        }
+        let updated = meta.clone();
+        drop(meta);
+        self.announce(ServerMessage::SessionUpdated { session: updated });
+    }
+
+    fn announce(&self, message: ServerMessage) {
+        // No receivers simply means no client is connected.
+        let _ = self.events.send(message);
     }
 }
 
@@ -105,18 +230,34 @@ pub fn claude_available() -> bool {
     executable::find(CLAUDE_COMMAND).is_some()
 }
 
+fn mark_interrupted(meta: &mut SessionMeta, last_activity: Option<SystemTime>) {
+    meta.status = SessionStatus::Interrupted;
+    let ended = last_activity.map_or_else(OffsetDateTime::now_utc, OffsetDateTime::from);
+    meta.ended_at = ended.format(&Rfc3339).ok();
+}
+
+fn existing_dir(path: &str) -> Result<PathBuf, SessionsError> {
+    let dir = PathBuf::from(path);
+    if dir.is_dir() {
+        Ok(dir)
+    } else {
+        Err(SessionsError::InvalidCwd(path.to_owned()))
+    }
+}
+
 fn launch_for(
     agent: Agent,
     cwd: &Path,
     agent_session_id: Option<&str>,
-) -> Result<Launch, CreateError> {
+    resume: bool,
+) -> Result<Launch, SessionsError> {
     let (program, args) = match (agent, agent_session_id) {
         (Agent::Claude, Some(id)) => {
-            let program = executable::find(CLAUDE_COMMAND).ok_or(CreateError::AgentNotFound)?;
-            let program = program.to_string_lossy().into_owned();
+            let program = executable::find(CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
+            let flag = if resume { "--resume" } else { "--session-id" };
             (
-                Some(program),
-                vec!["--session-id".to_owned(), id.to_owned()],
+                Some(program.to_string_lossy().into_owned()),
+                vec![flag.to_owned(), id.to_owned()],
             )
         }
         _ => (None, Vec::new()),
@@ -139,9 +280,51 @@ fn session_name(name: Option<&str>, cwd: &Path) -> String {
     }
 }
 
+fn now() -> Result<String, time::error::Format> {
+    OffsetDateTime::now_utc().format(&Rfc3339)
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionsError> {
+    mutex.lock().map_err(|_| SessionsError::Poisoned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    fn temp_root() -> PathBuf {
+        std::env::temp_dir().join(format!("cohors-sessions-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn shell_request(name: &str) -> CreateRequest {
+        CreateRequest {
+            agent: Agent::Shell,
+            cwd: std::env::temp_dir().display().to_string(),
+            name: Some(name.into()),
+        }
+    }
+
+    fn status_of(sessions: &Sessions, id: &str) -> SessionStatus {
+        sessions
+            .get(id)
+            .expect("entry")
+            .meta
+            .lock()
+            .expect("meta")
+            .status
+    }
+
+    fn wait_for_status(sessions: &Sessions, id: &str, status: SessionStatus) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if status_of(sessions, id) == status {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
 
     #[test]
     fn blank_name_falls_back_to_folder_name() {
@@ -157,30 +340,92 @@ mod tests {
     }
 
     #[test]
+    fn claude_resume_uses_resume_flag() {
+        let Ok(launch) = launch_for(Agent::Claude, Path::new("/tmp"), Some("abc"), true) else {
+            return; // claude is not installed on this machine
+        };
+        assert_eq!(launch.args, ["--resume", "abc"]);
+    }
+
+    #[test]
+    fn running_sessions_load_as_interrupted() {
+        let root = temp_root();
+        let store = SessionStore::new(root.clone());
+        let mut meta = SessionMeta {
+            id: "a".into(),
+            name: "a".into(),
+            agent: Agent::Shell,
+            cwd: "/tmp".into(),
+            agent_session_id: None,
+            status: SessionStatus::Running,
+            exit_code: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+        };
+        store.save(&meta).expect("save");
+        meta.id = "b".into();
+        meta.status = SessionStatus::Exited;
+        store.save(&meta).expect("save");
+
+        let sessions = Sessions::load(SessionStore::new(root.clone()));
+        assert_eq!(status_of(&sessions, "a"), SessionStatus::Interrupted);
+        assert_eq!(status_of(&sessions, "b"), SessionStatus::Exited);
+        let reloaded = SessionStore::new(root.clone()).load_all();
+        let a = reloaded.iter().find(|meta| meta.id == "a").expect("a");
+        assert_eq!(a.status, SessionStatus::Interrupted);
+        assert!(a.ended_at.is_some());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn rejects_missing_folder() {
-        let sessions = Sessions::default();
+        let sessions = Sessions::load(SessionStore::new(temp_root()));
         let result = sessions.create(CreateRequest {
             agent: Agent::Shell,
             cwd: "/definitely/not/here".into(),
             name: None,
         });
-        assert!(matches!(result, Err(CreateError::InvalidCwd(_))));
+        assert!(matches!(result, Err(SessionsError::InvalidCwd(_))));
     }
 
     #[cfg(unix)]
     #[test]
-    fn creates_shell_session() {
-        let sessions = Sessions::default();
-        let meta = sessions
-            .create(CreateRequest {
-                agent: Agent::Shell,
-                cwd: std::env::temp_dir().display().to_string(),
-                name: Some("build".into()),
-            })
-            .expect("create");
+    fn created_session_is_saved_and_announced() {
+        let root = temp_root();
+        let sessions = Sessions::load(SessionStore::new(root.clone()));
+        let mut events = sessions.subscribe();
+        let meta = sessions.create(shell_request("build")).expect("create");
         assert_eq!(meta.name, "build");
-        assert_eq!(meta.agent_session_id, None);
-        assert!(sessions.get(&meta.id).is_some());
-        assert_eq!(sessions.list().len(), 1);
+        assert!(matches!(
+            events.try_recv(),
+            Ok(ServerMessage::SessionCreated { .. })
+        ));
+        let saved = SessionStore::new(root.clone()).load_all();
+        assert_eq!(saved.len(), 1);
+        assert!(root.join(&meta.id).join("transcript.log").exists());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_marks_session_exited_and_resume_restarts_it() {
+        let root = temp_root();
+        let sessions = Sessions::load(SessionStore::new(root.clone()));
+        let meta = sessions.create(shell_request("s")).expect("create");
+        let entry = sessions.get(&meta.id).expect("entry");
+        entry.session.write_input("exit 4\r").expect("write");
+        assert!(wait_for_status(&sessions, &meta.id, SessionStatus::Exited));
+        let exited = entry.meta.lock().expect("meta").clone();
+        assert_eq!(exited.exit_code, Some(4));
+        assert!(exited.ended_at.is_some());
+
+        let resumed = sessions.resume(&meta.id).expect("resume");
+        assert_eq!(resumed.status, SessionStatus::Running);
+        assert_eq!(resumed.exit_code, None);
+        assert!(matches!(
+            sessions.resume(&meta.id),
+            Err(SessionsError::InvalidState(SessionStatus::Running))
+        ));
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -31,6 +31,8 @@ pub enum ClientMessage {
     },
     #[serde(rename = "session.attach")]
     SessionAttach { id: String },
+    #[serde(rename = "session.resume")]
+    SessionResume { id: String },
     #[serde(rename = "session.detach")]
     SessionDetach { id: String },
     #[serde(rename = "session.input")]
@@ -46,13 +48,18 @@ pub enum Agent {
     Shell,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     Running,
+    /// The process ended on its own.
+    Exited,
+    /// The daemon lost the process, e.g. after a reboot or crash.
+    Interrupted,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
+/// Also the on-disk format of `meta.json`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub id: String,
@@ -61,7 +68,9 @@ pub struct SessionMeta {
     pub cwd: String,
     pub agent_session_id: Option<String>,
     pub status: SessionStatus,
+    pub exit_code: Option<u32>,
     pub created_at: String,
+    pub ended_at: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
@@ -73,6 +82,7 @@ pub enum ErrorCode {
     SessionNotFound,
     InvalidCwd,
     AgentNotFound,
+    InvalidState,
     Internal,
 }
 
@@ -89,6 +99,8 @@ pub enum ServerMessage {
     SessionListResult { sessions: Vec<SessionMeta> },
     #[serde(rename = "session.created")]
     SessionCreated { session: SessionMeta },
+    #[serde(rename = "session.updated")]
+    SessionUpdated { session: SessionMeta },
     #[serde(rename = "session.snapshot")]
     SessionSnapshot { id: String, seq: u64, data: String },
     #[serde(rename = "session.output")]
@@ -168,7 +180,9 @@ mod tests {
             cwd: "/dev/cohors".into(),
             agent_session_id: Some("a".into()),
             status: SessionStatus::Running,
+            exit_code: None,
             created_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
         };
         let value = serde_json::to_value(ServerMessage::SessionCreated { session: meta })
             .expect("serialize");
@@ -183,7 +197,9 @@ mod tests {
                     "cwd": "/dev/cohors",
                     "agentSessionId": "a",
                     "status": "running",
-                    "createdAt": "2026-01-01T00:00:00Z"
+                    "exitCode": null,
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "endedAt": null
                 }
             })
         );

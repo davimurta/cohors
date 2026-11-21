@@ -5,7 +5,6 @@ use std::time::Duration;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -16,11 +15,10 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 
 use crate::auth::{origin_allowed, token_matches};
 use crate::protocol::{ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage};
-use crate::sessions::{CreateRequest, Sessions, claude_available};
+use crate::sessions::{CreateRequest, Sessions, SessionsError, claude_available};
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTGOING_QUEUE: usize = 256;
-const EVENT_QUEUE: usize = 256;
 
 type Sink = SplitSink<WebSocketStream<TcpStream>, Message>;
 type Source = SplitStream<WebSocketStream<TcpStream>>;
@@ -28,19 +26,12 @@ type Outgoing = mpsc::Sender<ServerMessage>;
 
 pub struct DaemonState {
     token: String,
-    sessions: Sessions,
-    /// Changes every connected client must see, such as a new session.
-    events: broadcast::Sender<ServerMessage>,
+    sessions: Arc<Sessions>,
 }
 
 impl DaemonState {
-    pub fn new(token: String) -> Self {
-        let (events, _) = broadcast::channel(EVENT_QUEUE);
-        Self {
-            token,
-            sessions: Sessions::default(),
-            events,
-        }
+    pub fn new(token: String, sessions: Arc<Sessions>) -> Self {
+        Self { token, sessions }
     }
 }
 
@@ -69,7 +60,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) {
     }
 
     let (outgoing, mut queue) = mpsc::channel(OUTGOING_QUEUE);
-    let mut events = state.events.subscribe();
+    let mut events = state.sessions.subscribe();
     let mut attachments: HashMap<String, JoinHandle<()>> = HashMap::new();
     loop {
         tokio::select! {
@@ -180,9 +171,16 @@ async fn handle_message(
         ClientMessage::SessionList => Some(ServerMessage::SessionListResult {
             sessions: state.sessions.list(),
         }),
-        ClientMessage::SessionCreate { agent, cwd, name } => {
-            create_session(state, CreateRequest { agent, cwd, name })
-        }
+        ClientMessage::SessionCreate { agent, cwd, name } => state
+            .sessions
+            .create(CreateRequest { agent, cwd, name })
+            .err()
+            .map(|error| request_error(&error, "session.create")),
+        ClientMessage::SessionResume { id } => state
+            .sessions
+            .resume(&id)
+            .err()
+            .map(|error| request_error(&error, &id)),
         ClientMessage::SessionAttach { id } => {
             if state.sessions.get(&id).is_some() {
                 let task = tokio::spawn(forward_output(
@@ -218,20 +216,10 @@ async fn handle_message(
     }
 }
 
-/// Announces the new session to every client; only failures go back to the
-/// requester, with `ref` naming the request.
-fn create_session(state: &DaemonState, request: CreateRequest) -> Option<ServerMessage> {
-    match state.sessions.create(request) {
-        Ok(session) => {
-            let _ = state.events.send(ServerMessage::SessionCreated { session });
-            None
-        }
-        Err(error) => Some(ServerMessage::error(
-            error.code(),
-            error.to_string(),
-            Some("session.create".into()),
-        )),
-    }
+/// Successes reach every client as events; only failures go back to the
+/// requester, with `ref` naming the session or request.
+fn request_error(error: &SessionsError, reference: &str) -> ServerMessage {
+    ServerMessage::error(error.code(), error.to_string(), Some(reference.to_owned()))
 }
 
 fn internal_error<E: std::fmt::Display>(
