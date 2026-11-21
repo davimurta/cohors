@@ -24,7 +24,12 @@
   --color-on-accent: #ffffff;
   --color-on-accent-muted: #ccfbf1;
 
-  /* Warning note */
+  /* Session states */
+  --color-exited-dot: #a8a29e;
+  --color-interrupted-dot: #d97706;
+  --color-interrupted-text: #92400e;
+
+  /* Warning note and interrupted surfaces */
   --color-warning-bg: #fffbeb;
   --color-warning-border: #fde68a;
   --color-warning-icon: #b45309;

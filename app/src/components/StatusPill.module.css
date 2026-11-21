@@ -14,3 +14,15 @@
   border-color: var(--color-accent-soft-border);
   color: var(--color-accent-soft-text);
 }
+
+.exited {
+  background: var(--color-bg-sidebar);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+
+.interrupted {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+  color: var(--color-interrupted-text);
+}

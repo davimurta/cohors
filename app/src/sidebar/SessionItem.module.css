@@ -55,3 +55,11 @@
 .running {
   color: var(--color-accent);
 }
+
+.exited {
+  color: var(--color-text-tertiary);
+}
+
+.interrupted {
+  color: var(--color-interrupted-text);
+}

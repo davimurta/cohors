@@ -13,3 +13,11 @@
 .running {
   background: var(--color-accent);
 }
+
+.exited {
+  background: var(--color-exited-dot);
+}
+
+.interrupted {
+  background: var(--color-interrupted-dot);
+}
