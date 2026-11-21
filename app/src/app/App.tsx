@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { EmptyState } from '../empty/EmptyState.tsx';
 import { NewSessionDialog } from '../new-session/NewSessionDialog.tsx';
 import { SessionView } from '../session/SessionView.tsx';
 import { Sidebar } from '../sidebar/Sidebar.tsx';
@@ -11,6 +12,7 @@ export function App() {
   const selected = useAppStore((state) =>
     state.sessions.find((session) => session.id === state.selectedId),
   );
+  const hasSessions = useAppStore((state) => state.sessions.length > 0);
 
   useNewSessionShortcut();
 
@@ -26,6 +28,7 @@ export function App() {
   return (
     <div className={styles.app}>
       <Sidebar />
+      {!hasSessions && <EmptyState />}
       {selected !== undefined && <SessionView key={selected.id} session={selected} />}
       <NewSessionDialog />
     </div>
