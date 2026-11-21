@@ -47,6 +47,11 @@ class SessionTerminal {
     this.visible = false;
   }
 
+  dispose(): void {
+    this.terminal.dispose();
+    this.host.remove();
+  }
+
   fitToHost(): void {
     if (this.visible) this.fit.fit();
   }
@@ -101,12 +106,24 @@ export function terminalFor(id: string): SessionTerminal {
 /** Routes output to terminals and re-attaches them after a reconnect. */
 export function startTerminalRouting(): () => void {
   return daemon.onMessage((message) => {
-    if (message.type === 'ready') {
-      for (const terminal of terminals.values()) terminal.attach();
+    if (message.type === 'session.list.result') {
+      syncWithSessions(new Set(message.sessions.map((session) => session.id)));
     } else if (message.type === 'session.snapshot' || message.type === 'session.output') {
       terminals.get(message.id)?.receive(message);
     }
   });
+}
+
+/** Drops terminals of sessions the daemon no longer has, re-attaches the rest. */
+function syncWithSessions(ids: Set<string>): void {
+  for (const [id, terminal] of terminals) {
+    if (ids.has(id)) {
+      terminal.attach();
+    } else {
+      terminal.dispose();
+      terminals.delete(id);
+    }
+  }
 }
 
 function cssToken(name: string): string {
