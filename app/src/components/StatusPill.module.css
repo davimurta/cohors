@@ -1,0 +1,16 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.running {
+  background: var(--color-accent-soft-bg);
+  border-color: var(--color-accent-soft-border);
+  color: var(--color-accent-soft-text);
+}
