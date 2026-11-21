@@ -41,6 +41,13 @@ export function applyServerMessage(state: SessionsState, message: ServerMessage)
       };
     case 'session.created':
       return sessionCreated(state, message.session);
+    case 'session.updated':
+      return {
+        ...state,
+        sessions: state.sessions.map((session) =>
+          session.id === message.session.id ? message.session : session,
+        ),
+      };
     case 'error':
       if (message.ref !== 'session.create') return state;
       return {

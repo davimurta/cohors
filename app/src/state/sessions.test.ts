@@ -15,7 +15,9 @@ function meta(id: string): SessionMeta {
     cwd: '/tmp',
     agentSessionId: null,
     status: 'running',
+    exitCode: null,
     createdAt: '2026-01-01T00:00:00Z',
+    endedAt: null,
   };
 }
 
@@ -94,6 +96,14 @@ describe('applyServerMessage', () => {
       session: meta('a'),
     });
     expect(state.sessions).toHaveLength(1);
+  });
+
+  it('replaces an updated session in place', () => {
+    const state = applyServerMessage(withSessions(['a', 'b']), {
+      type: 'session.updated',
+      session: { ...meta('a'), status: 'exited', exitCode: 1 },
+    });
+    expect(state.sessions.map((session) => session.status)).toEqual(['exited', 'running']);
   });
 
   it('turns a create error into a readable message', () => {

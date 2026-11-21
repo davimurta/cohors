@@ -4,7 +4,8 @@ export const PROTOCOL_VERSION = 1;
 
 export type Agent = 'claude' | 'shell';
 
-export type SessionStatus = 'running';
+/** `exited`: the process ended on its own. `interrupted`: the daemon lost it (reboot, crash). */
+export type SessionStatus = 'running' | 'exited' | 'interrupted';
 
 export interface SessionMeta {
   id: string;
@@ -13,8 +14,10 @@ export interface SessionMeta {
   cwd: string;
   agentSessionId: string | null;
   status: SessionStatus;
-  /** ISO 8601 timestamp. */
+  exitCode: number | null;
+  /** ISO 8601 timestamps. */
   createdAt: string;
+  endedAt: string | null;
 }
 
 export type ErrorCode =
@@ -24,6 +27,7 @@ export type ErrorCode =
   | 'session_not_found'
   | 'invalid_cwd'
   | 'agent_not_found'
+  | 'invalid_state'
   | 'internal';
 
 export type ClientMessage =
@@ -31,6 +35,7 @@ export type ClientMessage =
   | { type: 'session.list' }
   | { type: 'session.create'; agent: Agent; cwd: string; name?: string }
   | { type: 'session.attach'; id: string }
+  | { type: 'session.resume'; id: string }
   | { type: 'session.detach'; id: string }
   | { type: 'session.input'; id: string; data: string }
   | { type: 'session.resize'; id: string; cols: number; rows: number };
@@ -39,6 +44,7 @@ export type ServerMessage =
   | { type: 'ready'; protocolVersion: number; daemonVersion: string; claudeAvailable: boolean }
   | { type: 'session.list.result'; sessions: SessionMeta[] }
   | { type: 'session.created'; session: SessionMeta }
+  | { type: 'session.updated'; session: SessionMeta }
   | { type: 'session.snapshot'; id: string; seq: number; data: string }
   | { type: 'session.output'; id: string; seq: number; data: string }
   | { type: 'error'; code: ErrorCode; message: string; ref?: string };
