@@ -38,6 +38,7 @@
   --color-terminal-bg: #1c1917;
   --color-terminal-text: #e7e5e4;
   --color-terminal-muted: #a8a29e;
+  --color-terminal-divider: #44403c;
 
   /* Typography */
   --font-sans: 'Inter', system-ui, sans-serif;

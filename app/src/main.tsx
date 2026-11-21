@@ -3,13 +3,13 @@ import { createRoot } from 'react-dom/client';
 import './styles/fonts.ts';
 import './styles/tokens.css';
 import './styles/global.css';
-import { SessionTerminal } from './terminal/SessionTerminal.tsx';
+import { App } from './app/App.tsx';
 
 const root = document.getElementById('root');
 if (root === null) throw new Error('missing #root element');
 
 createRoot(root).render(
   <StrictMode>
-    <SessionTerminal />
+    <App />
   </StrictMode>,
 );
