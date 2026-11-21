@@ -128,10 +128,14 @@
   background: var(--color-accent);
 }
 
-.disconnected {
+.disconnected,
+.unavailable,
+.incompatible {
   color: var(--color-error-text);
 }
 
-.disconnected .connectionDot {
+.disconnected .connectionDot,
+.unavailable .connectionDot,
+.incompatible .connectionDot {
   background: var(--color-error-dot);
 }

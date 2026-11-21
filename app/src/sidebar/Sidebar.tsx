@@ -11,6 +11,8 @@ const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   connecting: 'Conectando ao daemon',
   ready: 'Daemon conectado',
   disconnected: 'Daemon desconectado',
+  unavailable: 'Daemon desconectado',
+  incompatible: 'Daemon incompatível',
 };
 
 export function Sidebar() {

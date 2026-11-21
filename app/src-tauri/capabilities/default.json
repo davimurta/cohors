@@ -23,6 +23,20 @@
           "url": "https://docs.claude.com/*"
         }
       ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/cohors-daemon",
+          "sidecar": true,
+          "args": [
+            {
+              "validator": "^--(detach|stop)$"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

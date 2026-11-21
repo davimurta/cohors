@@ -153,7 +153,11 @@ describe('resume', () => {
 
 describe('applyConnectionStatus', () => {
   it('cancels a pending creation when the connection drops', () => {
-    const state = applyConnectionStatus(withSessions([], { creating: true }), 'disconnected');
+    const state = applyConnectionStatus(
+      withSessions([], { creating: true }),
+      'disconnected',
+      null,
+    );
     expect(state.connection).toBe('disconnected');
     expect(state.creating).toBe(false);
   });

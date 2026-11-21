@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "daemon": "node scripts/build-daemon.mjs"
   },
   "dependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -18,6 +19,7 @@
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-fs": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2.7.3",
+    "@tauri-apps/plugin-shell": "^2.6.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "lucide-react": "^1.77.0",

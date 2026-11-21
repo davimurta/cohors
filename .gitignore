@@ -19,3 +19,6 @@ daemon.json
 .DS_Store
 .idea/
 .vscode/
+
+# Tauri sidecar, built from daemon/
+app/src-tauri/binaries/

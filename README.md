@@ -13,14 +13,12 @@ Requirements: Rust (stable), Node.js 24 and the [Tauri 2 prerequisites](https://
 From the repository root:
 
 ```sh
-# Terminal 1: the daemon (writes its port and token to the user data directory)
-cd daemon && cargo run
-
-# Terminal 2: the app
 cd app && npm install && npm run tauri dev
 ```
 
-`npm run dev` serves the same UI in a browser at http://localhost:5173, which is handy for UI work.
+The app builds the daemon (`npm run daemon`) and starts it in the background when none is running. To watch its logs instead, run it in the foreground first with `cd daemon && cargo run`.
+
+`npm run dev` serves the same UI in a browser at http://localhost:5173, which is handy for UI work. A browser cannot start the daemon, so run it with `cargo run`.
 
 Checks: `cargo fmt`, `cargo clippy` and `cargo test` in `daemon/`; `npm run build`, `npm run lint` and `npm test` in `app/`.
 

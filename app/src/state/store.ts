@@ -22,6 +22,10 @@ interface SessionsActions {
   closeNewSession: () => void;
   createSession: (request: CreateSessionRequest) => void;
   resumeSession: (id: string) => void;
+  retryConnection: () => void;
+  restartDaemon: () => void;
+  /** "Encerrar tudo": the daemon stops every session and exits. */
+  shutdownDaemon: () => void;
 }
 
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
@@ -45,6 +49,9 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
     set({ resumingId: id, resumeError: null });
     daemon.send({ type: 'session.resume', id });
   },
+  retryConnection: () => daemon.retryNow(),
+  restartDaemon: () => void daemon.restartDaemon(),
+  shutdownDaemon: () => daemon.send({ type: 'daemon.shutdown' }),
 }));
 
 /** Mirrors daemon events into the store. Returns a function that stops it. */
@@ -53,8 +60,8 @@ export function startDaemonSync(): () => void {
     if (message.type === 'ready') daemon.send({ type: 'session.list' });
     useAppStore.setState((state) => applyServerMessage(state, message));
   });
-  const stopStatus = daemon.onStatus((status) => {
-    useAppStore.setState((state) => applyConnectionStatus(state, status));
+  const stopStatus = daemon.onStatus((status, detail) => {
+    useAppStore.setState((state) => applyConnectionStatus(state, status, detail));
   });
   daemon.start();
   return () => {

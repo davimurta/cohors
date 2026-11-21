@@ -3,6 +3,8 @@ import type { ConnectionStatus } from '../daemon/client.ts';
 
 export interface SessionsState {
   connection: ConnectionStatus;
+  /** Technical reason shown on the daemon error screens. */
+  connectionDetail: string | null;
   /** Unknown until the daemon handshake completes. */
   claudeAvailable: boolean | null;
   sessions: SessionMeta[];
@@ -17,6 +19,7 @@ export interface SessionsState {
 
 export const initialSessionsState: SessionsState = {
   connection: 'connecting',
+  connectionDetail: null,
   claudeAvailable: null,
   sessions: [],
   selectedId: null,
@@ -65,10 +68,11 @@ export function applyServerMessage(state: SessionsState, message: ServerMessage)
 export function applyConnectionStatus(
   state: SessionsState,
   connection: ConnectionStatus,
+  connectionDetail: string | null,
 ): SessionsState {
-  if (connection === 'ready') return { ...state, connection };
+  if (connection === 'ready') return { ...state, connection, connectionDetail };
   // Requests in flight are lost with the connection.
-  return { ...state, connection, creating: false, resumingId: null };
+  return { ...state, connection, connectionDetail, creating: false, resumingId: null };
 }
 
 function sessionUpdated(state: SessionsState, updated: SessionMeta): SessionsState {
