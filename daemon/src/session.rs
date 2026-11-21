@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
@@ -42,8 +43,8 @@ pub enum SessionError {
     OpenPty(String),
     #[error("failed to spawn process: {0}")]
     Spawn(String),
-    #[error("failed to write to pty: {0}")]
-    Write(#[from] std::io::Error),
+    #[error("session input is closed")]
+    InputClosed,
     #[error("failed to resize pty: {0}")]
     Resize(String),
     #[error("session state lock poisoned")]
@@ -76,7 +77,7 @@ struct Output {
 
 pub struct Session {
     output: Arc<Mutex<Output>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    input: mpsc::Sender<Vec<u8>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
 }
 
@@ -116,9 +117,14 @@ impl Session {
             }
         });
 
+        // Writes block when the child stops reading, so they get their own
+        // thread instead of stalling the async runtime.
+        let (input, pending_input) = mpsc::channel();
+        thread::spawn(move || pump_input(writer, &pending_input));
+
         Ok(Self {
             output,
-            writer: Mutex::new(writer),
+            input,
             master: Mutex::new(pair.master),
         })
     }
@@ -134,10 +140,9 @@ impl Session {
     }
 
     pub fn write_input(&self, data: &str) -> Result<(), SessionError> {
-        let mut writer = lock(&self.writer)?;
-        writer.write_all(data.as_bytes())?;
-        writer.flush()?;
-        Ok(())
+        self.input
+            .send(data.as_bytes().to_vec())
+            .map_err(|_| SessionError::InputClosed)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), SessionError> {
@@ -165,6 +170,18 @@ fn command(launch: &Launch) -> CommandBuilder {
         command.env_remove(marker);
     }
     command
+}
+
+fn pump_input(mut writer: Box<dyn Write + Send>, pending: &mpsc::Receiver<Vec<u8>>) {
+    while let Ok(bytes) = pending.recv() {
+        if writer
+            .write_all(&bytes)
+            .and_then(|()| writer.flush())
+            .is_err()
+        {
+            return;
+        }
+    }
 }
 
 fn pump_output(mut reader: Box<dyn Read + Send>, output: &Mutex<Output>) {
