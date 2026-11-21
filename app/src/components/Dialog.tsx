@@ -12,6 +12,7 @@ interface DialogProps {
 /**
  * Modal built on the native <dialog>: showModal() traps focus and makes the
  * page inert, Esc closes it, and focus goes back to the opener on close.
+ * Mark the element that should get focus first with `data-autofocus`.
  */
 export function Dialog({ open, title, onClose, children }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -22,6 +23,8 @@ export function Dialog({ open, title, onClose, children }: DialogProps) {
     if (dialog === null || !open) return;
     const opener = document.activeElement;
     dialog.showModal();
+    // React's autoFocus runs before showModal, which then moves focus again.
+    dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus();
     return () => {
       dialog.close();
       if (opener instanceof HTMLElement) opener.focus();
