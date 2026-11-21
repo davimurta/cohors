@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::broadcast;
@@ -16,6 +16,8 @@ use crate::utf8::Utf8Decoder;
 const RING_BUFFER_BYTES: usize = 1024 * 1024;
 const LIVE_CHANNEL_CHUNKS: usize = 1024;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
+/// Output right after a resize is the program repainting, not activity.
+const REPAINT_WINDOW: Duration = Duration::from_secs(1);
 const INITIAL_SIZE: PtySize = PtySize {
     rows: 24,
     cols: 80,
@@ -81,11 +83,15 @@ struct Output {
     live: broadcast::Sender<OutputChunk>,
     transcript: Option<File>,
     last_output: Instant,
+    repaint_until: Option<Instant>,
 }
 
 impl Output {
     fn push(&mut self, data: String) {
-        self.last_output = Instant::now();
+        let now = Instant::now();
+        if self.repaint_until.is_none_or(|until| now >= until) {
+            self.last_output = now;
+        }
         if let Some(transcript) = &mut self.transcript {
             // A failed transcript write must not stop the live terminal.
             if let Err(error) = transcript.write_all(data.as_bytes()) {
@@ -124,6 +130,7 @@ impl Session {
                 live,
                 transcript,
                 last_output: Instant::now(),
+                repaint_until: None,
             })),
             process: Mutex::new(None),
         }
@@ -249,6 +256,7 @@ impl Session {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), SessionError> {
+        lock(&self.output)?.repaint_until = Some(Instant::now() + REPAINT_WINDOW);
         let process = lock(&self.process)?;
         let process = process.as_ref().ok_or(SessionError::NotRunning)?;
         process
@@ -385,6 +393,16 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("exit reported");
         assert_eq!(code, Some(3));
+    }
+
+    #[test]
+    fn repaint_after_resize_is_not_activity() {
+        let session = started("trap 'printf repaint' WINCH; read line");
+        thread::sleep(Duration::from_millis(200));
+        let before = session.last_output().expect("last output");
+        session.resize(100, 30).expect("resize");
+        assert!(wait_for_output(&session, "repaint").data.contains("repaint"));
+        assert_eq!(session.last_output(), Some(before));
     }
 
     #[test]
