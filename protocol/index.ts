@@ -4,8 +4,11 @@ export const PROTOCOL_VERSION = 1;
 
 export type Agent = 'claude' | 'shell';
 
-/** `exited`: the process ended on its own. `interrupted`: the daemon lost it (reboot, crash). */
-export type SessionStatus = 'running' | 'exited' | 'interrupted';
+/**
+ * `idle`: running without output for a while. `exited`: the process ended on
+ * its own. `interrupted`: the daemon lost it (reboot, crash, shutdown).
+ */
+export type SessionStatus = 'running' | 'idle' | 'exited' | 'interrupted';
 
 export interface SessionMeta {
   id: string;
@@ -18,6 +21,8 @@ export interface SessionMeta {
   /** ISO 8601 timestamps. */
   createdAt: string;
   endedAt: string | null;
+  /** Time of the last output while the session is idle. */
+  idleSince: string | null;
 }
 
 export type ErrorCode =

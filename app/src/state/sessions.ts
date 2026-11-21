@@ -1,5 +1,6 @@
 import type { ErrorCode, SessionMeta, ServerMessage } from '@cohors/protocol';
 import type { ConnectionStatus } from '../daemon/client.ts';
+import { isLive } from '../session/status.ts';
 
 export interface SessionsState {
   connection: ConnectionStatus;
@@ -77,7 +78,7 @@ export function applyConnectionStatus(
 
 function sessionUpdated(state: SessionsState, updated: SessionMeta): SessionsState {
   const sessions = state.sessions.map((session) => (session.id === updated.id ? updated : session));
-  if (state.resumingId !== updated.id || updated.status !== 'running') {
+  if (state.resumingId !== updated.id || !isLive(updated.status)) {
     return { ...state, sessions };
   }
   return { ...state, sessions, resumingId: null, resumeError: null };

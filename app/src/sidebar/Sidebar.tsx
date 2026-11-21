@@ -4,6 +4,7 @@ import { Button } from '../components/Button.tsx';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { NEW_SESSION_KEYS, NEW_SESSION_SHORTCUT } from '../platform.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
+import { useNow } from '../session/useNow.ts';
 import { useAppStore } from '../state/store.ts';
 import { SessionItem } from './SessionItem.tsx';
 import { ShutdownAllButton } from './ShutdownAllButton.tsx';
@@ -77,6 +78,7 @@ interface SessionsNavProps {
 }
 
 function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps) {
+  const now = useNow();
   return (
     <>
       <div role="tablist" aria-label="Sessões" className={styles.tabs}>
@@ -98,6 +100,7 @@ function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps)
               session={session}
               selected={session.id === selectedId}
               home={home}
+              now={now}
               onSelect={onSelect}
             />
           ))}

@@ -4,6 +4,7 @@ import { Button } from '../components/Button.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
 import { EndedPanel } from './EndedPanel.tsx';
+import { isLive } from './status.ts';
 import { AGENT_LABEL, displayPath, formatElapsed, formatLastActivity } from './format.ts';
 import { useHomeDir } from './useHomeDir.ts';
 import { useNow } from './useNow.ts';
@@ -12,7 +13,7 @@ import styles from './SessionView.module.css';
 export function SessionView({ session }: { session: SessionMeta }) {
   const home = useHomeDir();
   const now = useNow();
-  const running = session.status === 'running';
+  const live = isLive(session.status);
 
   return (
     <main className={styles.view}>
@@ -22,7 +23,7 @@ export function SessionView({ session }: { session: SessionMeta }) {
             <h1 className={styles.title}>{session.name}</h1>
             <StatusPill status={session.status} />
           </div>
-          {running ? (
+          {live ? (
             <div className={styles.meta}>
               <span className={styles.folder}>
                 <Folder size={14} aria-hidden="true" />
@@ -45,7 +46,7 @@ export function SessionView({ session }: { session: SessionMeta }) {
             </span>
           )}
         </div>
-        {running && (
+        {live && (
           <div className={styles.actions}>
             <Button icon={<FileText size={16} aria-hidden="true" />} disabled>
               Notas
@@ -56,7 +57,7 @@ export function SessionView({ session }: { session: SessionMeta }) {
           </div>
         )}
       </header>
-      {running ? (
+      {live ? (
         <TerminalPane sessionId={session.id} label={`Terminal da sessão ${session.name}`} />
       ) : (
         <EndedPanel session={session} />

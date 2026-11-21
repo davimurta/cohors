@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { displayPath, formatElapsed, formatLastActivity } from './format.ts';
+import { displayPath, formatDuration, formatElapsed, formatLastActivity } from './format.ts';
 
 const start = '2026-01-01T00:00:00Z';
 const at = (ms: number) => Date.parse(start) + ms;
@@ -11,6 +11,11 @@ describe('formatElapsed', () => {
     expect(formatElapsed(start, at(3 * 3_600_000))).toBe('há 3 h');
     expect(formatElapsed(start, at(24 * 3_600_000))).toBe('há 1 dia');
     expect(formatElapsed(start, at(50 * 3_600_000))).toBe('há 2 dias');
+  });
+
+  it('has a bare duration form', () => {
+    expect(formatDuration(start, at(30_000))).toBeNull();
+    expect(formatDuration(start, at(4 * 60_000))).toBe('4 min');
   });
 
   it('treats clock skew as now', () => {

@@ -25,6 +25,7 @@
   --color-on-accent-muted: #ccfbf1;
 
   /* Session states */
+  --color-idle-ring: #78716c;
   --color-exited-dot: #a8a29e;
   --color-interrupted-dot: #d97706;
   --color-interrupted-text: #92400e;

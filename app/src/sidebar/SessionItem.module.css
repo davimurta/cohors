@@ -56,8 +56,13 @@
   color: var(--color-accent);
 }
 
+.idle,
 .exited {
   color: var(--color-text-tertiary);
+}
+
+.idle {
+  font-weight: 400;
 }
 
 .interrupted {

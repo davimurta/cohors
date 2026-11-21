@@ -14,6 +14,10 @@
   background: var(--color-accent);
 }
 
+.idle {
+  border: 1.5px solid var(--color-idle-ring);
+}
+
 .exited {
   background: var(--color-exited-dot);
 }

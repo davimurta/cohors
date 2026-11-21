@@ -41,8 +41,9 @@ Failures are reported as `error {code, message, ref?}`. `ref` is the session id 
 
 Each session lives in `sessions/<id>/` under the user data directory: `meta.json` (the `SessionMeta` above) and `transcript.log` (raw terminal output, appended across resumes with a separator line). Both are owner-only.
 
-- `running` becomes `exited` when the process ends on its own, with `exitCode` and `endedAt` set and `session.updated` sent.
-- On startup the daemon has no processes, so sessions saved as `running` become `interrupted`, with `endedAt` set to the transcript's last write.
+- `running` becomes `idle` after 10 seconds without output, with `idleSince` set to the last output, and back to `running` on the next output. The daemon checks every 2 seconds and sends `session.updated` only on a change.
+- `running` or `idle` becomes `exited` when the process ends on its own, with `exitCode` and `endedAt` set and `session.updated` sent.
+- On startup the daemon has no processes, so sessions saved as `running` or `idle` become `interrupted`, with `endedAt` set to the transcript's last write.
 - Resuming keeps the session's output buffer, so attached clients keep streaming without re-attaching.
 
 ## Terminal state on attach
