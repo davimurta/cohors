@@ -66,7 +66,7 @@ export function applyConnectionStatus(
 function sessionCreated(state: SessionsState, session: SessionMeta): SessionsState {
   const exists = state.sessions.some((existing) => existing.id === session.id);
   const sessions = exists ? state.sessions : [...state.sessions, session];
-  if (!state.creating) return { ...state, sessions };
+  if (!state.creating) return { ...state, sessions, selectedId: state.selectedId ?? session.id };
   // The creation this client asked for: open it and close the dialog.
   return {
     ...state,

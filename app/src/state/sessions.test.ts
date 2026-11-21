@@ -80,6 +80,14 @@ describe('applyServerMessage', () => {
     expect(state.selectedId).toBe('a');
   });
 
+  it('selects a session created elsewhere when nothing is selected', () => {
+    const state = applyServerMessage(initialSessionsState, {
+      type: 'session.created',
+      session: meta('a'),
+    });
+    expect(state.selectedId).toBe('a');
+  });
+
   it('ignores a duplicate created event', () => {
     const state = applyServerMessage(withSessions(['a']), {
       type: 'session.created',
