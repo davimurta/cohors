@@ -23,6 +23,12 @@ pub enum ClientMessage {
     Hello { token: Token, protocol_version: u32 },
     #[serde(rename = "session.list")]
     SessionList,
+    #[serde(rename = "session.create")]
+    SessionCreate {
+        agent: Agent,
+        cwd: String,
+        name: Option<String>,
+    },
     #[serde(rename = "session.attach")]
     SessionAttach { id: String },
     #[serde(rename = "session.detach")]
@@ -33,19 +39,29 @@ pub enum ClientMessage {
     SessionResize { id: String, cols: u16, rows: u16 },
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
     Claude,
     Shell,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    Running,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionInfo {
+pub struct SessionMeta {
     pub id: String,
+    pub name: String,
     pub agent: Agent,
     pub cwd: String,
+    pub agent_session_id: Option<String>,
+    pub status: SessionStatus,
+    pub created_at: String,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
@@ -55,19 +71,24 @@ pub enum ErrorCode {
     UnsupportedProtocol,
     BadRequest,
     SessionNotFound,
+    InvalidCwd,
+    AgentNotFound,
     Internal,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum ServerMessage {
     #[serde(rename = "ready")]
     Ready {
         protocol_version: u32,
         daemon_version: &'static str,
+        claude_available: bool,
     },
     #[serde(rename = "session.list.result")]
-    SessionListResult { sessions: Vec<SessionInfo> },
+    SessionListResult { sessions: Vec<SessionMeta> },
+    #[serde(rename = "session.created")]
+    SessionCreated { session: SessionMeta },
     #[serde(rename = "session.snapshot")]
     SessionSnapshot { id: String, seq: u64, data: String },
     #[serde(rename = "session.output")]
@@ -126,6 +147,49 @@ mod tests {
     }
 
     #[test]
+    fn parses_create_with_optional_name() {
+        let message = parse(json!({"type": "session.create", "agent": "shell", "cwd": "/tmp"}));
+        assert_eq!(
+            message,
+            ClientMessage::SessionCreate {
+                agent: Agent::Shell,
+                cwd: "/tmp".into(),
+                name: None
+            }
+        );
+    }
+
+    #[test]
+    fn serializes_session_meta_in_camel_case() {
+        let meta = SessionMeta {
+            id: "s".into(),
+            name: "cohors".into(),
+            agent: Agent::Claude,
+            cwd: "/dev/cohors".into(),
+            agent_session_id: Some("a".into()),
+            status: SessionStatus::Running,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let value = serde_json::to_value(ServerMessage::SessionCreated { session: meta })
+            .expect("serialize");
+        assert_eq!(
+            value,
+            json!({
+                "type": "session.created",
+                "session": {
+                    "id": "s",
+                    "name": "cohors",
+                    "agent": "claude",
+                    "cwd": "/dev/cohors",
+                    "agentSessionId": "a",
+                    "status": "running",
+                    "createdAt": "2026-01-01T00:00:00Z"
+                }
+            })
+        );
+    }
+
+    #[test]
     fn rejects_unknown_type() {
         let result = serde_json::from_value::<ClientMessage>(json!({"type": "nope"}));
         assert!(result.is_err());
@@ -142,11 +206,17 @@ mod tests {
         let value = serde_json::to_value(ServerMessage::Ready {
             protocol_version: 1,
             daemon_version: "0.1.0",
+            claude_available: true,
         })
         .expect("serialize");
         assert_eq!(
             value,
-            json!({"type": "ready", "protocolVersion": 1, "daemonVersion": "0.1.0"})
+            json!({
+                "type": "ready",
+                "protocolVersion": 1,
+                "daemonVersion": "0.1.0",
+                "claudeAvailable": true
+            })
         );
     }
 

@@ -5,6 +5,7 @@ use std::time::Duration;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -14,26 +15,33 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 
 use crate::auth::{origin_allowed, token_matches};
-use crate::protocol::{
-    ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage, SessionInfo,
-};
-use crate::session::Session;
+use crate::protocol::{ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage};
+use crate::sessions::{CreateRequest, Sessions, claude_available};
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTGOING_QUEUE: usize = 256;
+const EVENT_QUEUE: usize = 256;
 
 type Sink = SplitSink<WebSocketStream<TcpStream>, Message>;
 type Source = SplitStream<WebSocketStream<TcpStream>>;
 type Outgoing = mpsc::Sender<ServerMessage>;
 
-pub struct SessionEntry {
-    pub info: SessionInfo,
-    pub session: Session,
+pub struct DaemonState {
+    token: String,
+    sessions: Sessions,
+    /// Changes every connected client must see, such as a new session.
+    events: broadcast::Sender<ServerMessage>,
 }
 
-pub struct DaemonState {
-    pub token: String,
-    pub sessions: HashMap<String, SessionEntry>,
+impl DaemonState {
+    pub fn new(token: String) -> Self {
+        let (events, _) = broadcast::channel(EVENT_QUEUE);
+        Self {
+            token,
+            sessions: Sessions::default(),
+            events,
+        }
+    }
 }
 
 pub async fn serve(listener: TcpListener, state: Arc<DaemonState>) {
@@ -61,6 +69,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) {
     }
 
     let (outgoing, mut queue) = mpsc::channel(OUTGOING_QUEUE);
+    let mut events = state.events.subscribe();
     let mut attachments: HashMap<String, JoinHandle<()>> = HashMap::new();
     loop {
         tokio::select! {
@@ -72,6 +81,19 @@ async fn handle_connection(stream: TcpStream, state: Arc<DaemonState>) {
                 Some(Ok(_)) => {}
             },
             Some(message) = queue.recv() => {
+                if send(&mut sink, &message).await.is_err() {
+                    break;
+                }
+            }
+            event = events.recv() => {
+                let message = match event {
+                    Ok(message) => message,
+                    // Missed events are replaced by the full current list.
+                    Err(RecvError::Lagged(_)) => ServerMessage::SessionListResult {
+                        sessions: state.sessions.list(),
+                    },
+                    Err(RecvError::Closed) => break,
+                };
                 if send(&mut sink, &message).await.is_err() {
                     break;
                 }
@@ -121,6 +143,7 @@ async fn handshake(sink: &mut Sink, source: &mut Source, token: &str) -> bool {
                 ServerMessage::Ready {
                     protocol_version: PROTOCOL_VERSION,
                     daemon_version: DAEMON_VERSION,
+                    claude_available: claude_available(),
                 }
             }
         }
@@ -154,9 +177,14 @@ async fn handle_message(
             "already authenticated",
             None,
         )),
-        ClientMessage::SessionList => Some(list_sessions(state)),
+        ClientMessage::SessionList => Some(ServerMessage::SessionListResult {
+            sessions: state.sessions.list(),
+        }),
+        ClientMessage::SessionCreate { agent, cwd, name } => {
+            create_session(state, CreateRequest { agent, cwd, name })
+        }
         ClientMessage::SessionAttach { id } => {
-            if state.sessions.contains_key(&id) {
+            if state.sessions.get(&id).is_some() {
                 let task = tokio::spawn(forward_output(
                     Arc::clone(state),
                     id.clone(),
@@ -176,36 +204,41 @@ async fn handle_message(
             }
             None
         }
-        ClientMessage::SessionInput { id, data } => {
-            with_session(state, id, |session| session.write_input(&data))
-        }
-        ClientMessage::SessionResize { id, cols, rows } => {
-            with_session(state, id, |session| session.resize(cols, rows))
-        }
+        ClientMessage::SessionInput { id, data } => match state.sessions.get(&id) {
+            Some(entry) => internal_error(entry.session.write_input(&data), id),
+            None => Some(session_not_found(id)),
+        },
+        ClientMessage::SessionResize { id, cols, rows } => match state.sessions.get(&id) {
+            Some(entry) => internal_error(entry.session.resize(cols, rows), id),
+            None => Some(session_not_found(id)),
+        },
     };
     if let Some(reply) = reply {
         let _ = outgoing.send(reply).await;
     }
 }
 
-fn list_sessions(state: &DaemonState) -> ServerMessage {
-    let sessions = state
-        .sessions
-        .values()
-        .map(|entry| entry.info.clone())
-        .collect();
-    ServerMessage::SessionListResult { sessions }
+/// Announces the new session to every client; only failures go back to the
+/// requester, with `ref` naming the request.
+fn create_session(state: &DaemonState, request: CreateRequest) -> Option<ServerMessage> {
+    match state.sessions.create(request) {
+        Ok(session) => {
+            let _ = state.events.send(ServerMessage::SessionCreated { session });
+            None
+        }
+        Err(error) => Some(ServerMessage::error(
+            error.code(),
+            error.to_string(),
+            Some("session.create".into()),
+        )),
+    }
 }
 
-fn with_session<E: std::fmt::Display>(
-    state: &DaemonState,
+fn internal_error<E: std::fmt::Display>(
+    result: Result<(), E>,
     id: String,
-    action: impl FnOnce(&Session) -> Result<(), E>,
 ) -> Option<ServerMessage> {
-    let Some(entry) = state.sessions.get(&id) else {
-        return Some(session_not_found(id));
-    };
-    action(&entry.session)
+    result
         .err()
         .map(|error| ServerMessage::error(ErrorCode::Internal, error.to_string(), Some(id)))
 }

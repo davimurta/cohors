@@ -1,7 +1,13 @@
 const TOKEN_BYTES: usize = 32;
 
-/// Origins of the only clients allowed to connect: the app web view in development.
-const ALLOWED_ORIGINS: &[&str] = &["http://localhost:5173", "http://127.0.0.1:5173"];
+/// Origins of the only clients allowed to connect: the Tauri web view
+/// (macOS and Linux, then Windows) and the Vite dev server.
+const ALLOWED_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+];
 
 pub fn generate_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; TOKEN_BYTES];
@@ -53,6 +59,7 @@ mod tests {
 
     #[test]
     fn origin_requires_allowlisted_value() {
+        assert!(origin_allowed(Some("tauri://localhost")));
         assert!(origin_allowed(Some("http://localhost:5173")));
         assert!(!origin_allowed(Some("https://evil.example")));
         assert!(!origin_allowed(Some("http://localhost:5174")));
