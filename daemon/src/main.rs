@@ -3,6 +3,7 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cohors_daemon::auth::generate_token;
 use cohors_daemon::daemon_file::{self, DaemonFile};
@@ -13,6 +14,8 @@ use cohors_daemon::{control, instance, login_path};
 use tokio::net::TcpListener;
 
 const USAGE: &str = "usage: cohors-daemon [--detach | --stop]";
+/// How often sessions are checked for idleness.
+const IDLE_CHECK: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -62,6 +65,15 @@ async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
         },
     )?;
     eprintln!("listening on 127.0.0.1:{port}");
+
+    let idle_sessions = Arc::clone(&sessions);
+    tokio::spawn(async move {
+        let mut ticks = tokio::time::interval(IDLE_CHECK);
+        loop {
+            ticks.tick().await;
+            idle_sessions.refresh_idle(Instant::now());
+        }
+    });
 
     let state = Arc::new(DaemonState::new(token, Arc::clone(&sessions)));
     tokio::select! {

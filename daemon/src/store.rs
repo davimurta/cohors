@@ -87,6 +87,7 @@ mod tests {
             exit_code: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
+            idle_since: None,
         }
     }
 
@@ -98,6 +99,18 @@ mod tests {
         let mut ids: Vec<String> = store.load_all().into_iter().map(|meta| meta.id).collect();
         ids.sort();
         assert_eq!(ids, ["a", "b"]);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn loads_meta_saved_before_idle_tracking() {
+        let (store, root) = temp_store();
+        let dir = root.join("old");
+        fs::create_dir_all(&dir).expect("dir");
+        let json = r#"{"id":"old","name":"n","agent":"shell","cwd":"/tmp","agentSessionId":null,
+            "status":"exited","exitCode":0,"createdAt":"2026-01-01T00:00:00Z","endedAt":null}"#;
+        fs::write(dir.join(META_FILE), json).expect("write");
+        assert_eq!(store.load_all()[0].idle_since, None);
         fs::remove_dir_all(root).expect("cleanup");
     }
 

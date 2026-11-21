@@ -20,6 +20,10 @@ const EVENT_QUEUE: usize = 256;
 const RESUME_SEPARATOR: &str = "\r\n\x1b[2m--- sessão retomada ---\x1b[0m\r\n";
 /// How long processes get to exit on their own before a hard kill.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// Without output for this long, a session counts as idle. Claude Code
+/// streams output every few hundred milliseconds while it works and none
+/// at all while it waits at its prompt.
+pub const IDLE_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionsError {
@@ -83,7 +87,7 @@ impl Sessions {
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let mut entries = HashMap::new();
         for mut meta in store.load_all() {
-            if meta.status == SessionStatus::Running {
+            if meta.status.is_live() {
                 let last_activity = store.transcript_modified(&meta.id);
                 mark_interrupted(&mut meta, last_activity);
                 if let Err(error) = store.save(&meta) {
@@ -147,6 +151,7 @@ impl Sessions {
             exit_code: None,
             created_at: now()?,
             ended_at: None,
+            idle_since: None,
         };
         let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
         let started = session
@@ -187,6 +192,7 @@ impl Sessions {
         meta.status = SessionStatus::Running;
         meta.exit_code = None;
         meta.ended_at = None;
+        meta.idle_since = None;
         self.store.save(&meta)?;
         let updated = meta.clone();
         drop(meta);
@@ -210,7 +216,7 @@ impl Sessions {
         };
         for entry in &entries {
             if let Ok(mut meta) = entry.meta.lock()
-                && meta.status == SessionStatus::Running
+                && meta.status.is_live()
             {
                 mark_interrupted(&mut meta, None);
                 if let Err(error) = self.store.save(&meta) {
@@ -225,6 +231,40 @@ impl Sessions {
         }
         for entry in &entries {
             entry.session.force_kill();
+        }
+    }
+
+    /// Moves live sessions between running and idle based on their last
+    /// output. Called periodically; announces only actual changes.
+    pub fn refresh_idle(&self, now: Instant) {
+        let entries: Vec<Arc<SessionEntry>> = match self.entries.lock() {
+            Ok(entries) => entries.values().cloned().collect(),
+            Err(_) => return,
+        };
+        for entry in entries {
+            let Some(last_output) = entry.session.last_output() else {
+                continue;
+            };
+            let Ok(mut meta) = entry.meta.lock() else {
+                continue;
+            };
+            let quiet_for = now.saturating_duration_since(last_output);
+            let next = match meta.status {
+                SessionStatus::Running if quiet_for >= IDLE_AFTER => SessionStatus::Idle,
+                SessionStatus::Idle if quiet_for < IDLE_AFTER => SessionStatus::Running,
+                _ => continue,
+            };
+            meta.status = next;
+            meta.idle_since = (next == SessionStatus::Idle)
+                .then(|| SystemTime::now().checked_sub(quiet_for))
+                .flatten()
+                .and_then(|since| OffsetDateTime::from(since).format(&Rfc3339).ok());
+            if let Err(error) = self.store.save(&meta) {
+                eprintln!("failed to save session {}: {error}", meta.id);
+            }
+            let updated = meta.clone();
+            drop(meta);
+            self.announce(ServerMessage::SessionUpdated { session: updated });
         }
     }
 
@@ -255,10 +295,11 @@ impl Sessions {
         let Ok(mut meta) = entry.meta.lock() else {
             return;
         };
-        if meta.status != SessionStatus::Running {
+        if !meta.status.is_live() {
             return;
         }
         meta.status = SessionStatus::Exited;
+        meta.idle_since = None;
         meta.exit_code = exit_code;
         meta.ended_at = now().ok();
         if let Err(error) = self.store.save(&meta) {
@@ -418,6 +459,7 @@ mod tests {
             exit_code: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
+            idle_since: None,
         };
         store.save(&meta).expect("save");
         meta.id = "b".into();
@@ -460,6 +502,36 @@ mod tests {
         let saved = SessionStore::new(root.clone()).load_all();
         assert_eq!(saved.len(), 1);
         assert!(root.join(&meta.id).join("transcript.log").exists());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quiet_session_turns_idle_and_output_makes_it_run_again() {
+        let root = temp_root();
+        let sessions = load(&root);
+        let mut events = sessions.subscribe();
+        let meta = sessions.create(shell_request("s")).expect("create");
+        let _ = events.try_recv();
+        let entry = sessions.get(&meta.id).expect("entry");
+
+        sessions.refresh_idle(Instant::now());
+        assert_eq!(status_of(&sessions, &meta.id), SessionStatus::Running);
+
+        sessions.refresh_idle(Instant::now() + IDLE_AFTER + Duration::from_secs(5));
+        assert_eq!(status_of(&sessions, &meta.id), SessionStatus::Idle);
+        assert!(entry.meta.lock().expect("meta").idle_since.is_some());
+        assert!(matches!(
+            events.try_recv(),
+            Ok(ServerMessage::SessionUpdated { .. })
+        ));
+        sessions.refresh_idle(Instant::now() + IDLE_AFTER + Duration::from_secs(5));
+        assert!(events.try_recv().is_err(), "no event without a change");
+
+        entry.session.write_marker("activity").expect("output");
+        sessions.refresh_idle(Instant::now());
+        assert_eq!(status_of(&sessions, &meta.id), SessionStatus::Running);
+        assert_eq!(entry.meta.lock().expect("meta").idle_since, None);
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

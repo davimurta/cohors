@@ -54,6 +54,8 @@ pub enum Agent {
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     Running,
+    /// Running, but without output for a while.
+    Idle,
     /// The process ended on its own.
     Exited,
     /// The daemon lost the process, e.g. after a reboot or crash.
@@ -73,6 +75,15 @@ pub struct SessionMeta {
     pub exit_code: Option<u32>,
     pub created_at: String,
     pub ended_at: Option<String>,
+    /// Time of the last output while the session is idle.
+    pub idle_since: Option<String>,
+}
+
+impl SessionStatus {
+    /// Running or idle: the session has a live process.
+    pub fn is_live(self) -> bool {
+        matches!(self, Self::Running | Self::Idle)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
@@ -185,6 +196,7 @@ mod tests {
             exit_code: None,
             created_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
+            idle_since: None,
         };
         let value = serde_json::to_value(ServerMessage::SessionCreated { session: meta })
             .expect("serialize");
@@ -201,7 +213,8 @@ mod tests {
                     "status": "running",
                     "exitCode": null,
                     "createdAt": "2026-01-01T00:00:00Z",
-                    "endedAt": null
+                    "endedAt": null,
+                    "idleSince": null
                 }
             })
         );

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::Instant;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::broadcast;
@@ -79,10 +80,12 @@ struct Output {
     buffer: RingBuffer,
     live: broadcast::Sender<OutputChunk>,
     transcript: Option<File>,
+    last_output: Instant,
 }
 
 impl Output {
     fn push(&mut self, data: String) {
+        self.last_output = Instant::now();
         if let Some(transcript) = &mut self.transcript {
             // A failed transcript write must not stop the live terminal.
             if let Err(error) = transcript.write_all(data.as_bytes()) {
@@ -120,6 +123,7 @@ impl Session {
                 buffer: RingBuffer::new(RING_BUFFER_BYTES),
                 live,
                 transcript,
+                last_output: Instant::now(),
             })),
             process: Mutex::new(None),
         }
@@ -151,6 +155,8 @@ impl Session {
             .take_writer()
             .map_err(|error| SessionError::OpenPty(error.to_string()))?;
 
+        // A new process counts as fresh activity.
+        lock(&self.output)?.last_output = Instant::now();
         let killer = child.clone_killer();
         let pid = child.process_id();
         let alive = Arc::new(AtomicBool::new(true));
@@ -176,6 +182,10 @@ impl Session {
             alive,
         });
         Ok(())
+    }
+
+    pub fn last_output(&self) -> Option<Instant> {
+        lock(&self.output).ok().map(|output| output.last_output)
     }
 
     pub fn is_alive(&self) -> bool {
