@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +10,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use tokio::sync::broadcast;
 
 use crate::ring_buffer::{RingBuffer, Snapshot};
+use crate::transcript::Transcript;
 use crate::utf8::Utf8Decoder;
 
 const RING_BUFFER_BYTES: usize = 1024 * 1024;
@@ -28,7 +28,7 @@ const INITIAL_SIZE: PtySize = PtySize {
 /// Variables that mark a process as running inside another Claude Code
 /// session. Inheriting them (e.g. when the daemon is started from a Claude
 /// Code terminal) makes the child disable transcript saving and resume.
-const INHERITED_AGENT_MARKERS: &[&str] = &[
+pub const INHERITED_AGENT_MARKERS: &[&str] = &[
     "CLAUDECODE",
     "CLAUDE_CODE_ENTRYPOINT",
     "CLAUDE_CODE_SESSION_ID",
@@ -83,7 +83,7 @@ pub struct Attachment {
 struct Output {
     buffer: RingBuffer,
     live: broadcast::Sender<OutputChunk>,
-    transcript: Option<File>,
+    transcript: Option<Transcript>,
     last_output: Instant,
     repaint_until: Option<Instant>,
 }
@@ -96,7 +96,7 @@ impl Output {
         }
         if let Some(transcript) = &mut self.transcript {
             // A failed transcript write must not stop the live terminal.
-            if let Err(error) = transcript.write_all(data.as_bytes()) {
+            if let Err(error) = transcript.append(data.as_bytes()) {
                 eprintln!("failed to write transcript: {error}");
                 self.transcript = None;
             }
@@ -124,7 +124,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(transcript: Option<File>) -> Self {
+    pub fn new(transcript: Option<Transcript>) -> Self {
         let (live, _) = broadcast::channel(LIVE_CHANNEL_CHUNKS);
         Self {
             output: Arc::new(Mutex::new(Output {
@@ -455,13 +455,13 @@ mod tests {
 
     #[test]
     fn writes_output_to_transcript() {
-        let path = std::env::temp_dir().join(format!("cohors-transcript-{}", uuid::Uuid::new_v4()));
-        let session = Session::new(Some(File::create(&path).expect("create")));
+        let dir = std::env::temp_dir().join(format!("cohors-transcript-{}", uuid::Uuid::new_v4()));
+        let session = Session::new(Some(Transcript::open(&dir).expect("open")));
         session.start(&sh("printf logged"), |_| {}).expect("start");
         wait_for_output(&session, "logged");
-        let transcript = std::fs::read_to_string(&path).expect("read");
-        assert!(transcript.contains("logged"));
-        std::fs::remove_file(path).expect("cleanup");
+        let transcript = crate::transcript::read_tail(&dir, 1024).expect("read");
+        assert!(String::from_utf8_lossy(&transcript).contains("logged"));
+        std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[test]

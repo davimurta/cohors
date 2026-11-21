@@ -15,4 +15,5 @@ pub mod session;
 pub mod sessions;
 pub mod store;
 pub mod terminal_modes;
+pub mod transcript;
 pub mod utf8;

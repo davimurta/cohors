@@ -1,13 +1,14 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::private_fs;
 use crate::protocol::SessionMeta;
+use crate::transcript::{self, Transcript};
 
 const META_FILE: &str = "meta.json";
-const TRANSCRIPT_FILE: &str = "transcript.log";
+const SUMMARY_FILE: &str = "summary.md";
 
 /// Session folders on disk: `<root>/<id>/meta.json` and `transcript.log`.
 pub struct SessionStore {
@@ -49,14 +50,28 @@ impl SessionStore {
             .collect()
     }
 
-    pub fn open_transcript(&self, id: &str) -> io::Result<File> {
-        let dir = self.root.join(id);
-        private_fs::create_dir(&dir)?;
-        private_fs::open_append(&dir.join(TRANSCRIPT_FILE))
+    pub fn open_transcript(&self, id: &str) -> io::Result<Transcript> {
+        Transcript::open(&self.root.join(id))
+    }
+
+    pub fn read_transcript(&self, id: &str, max_bytes: u64) -> io::Result<Vec<u8>> {
+        transcript::read_tail(&self.root.join(id), max_bytes)
+    }
+
+    pub fn save_summary(&self, id: &str, text: &str) -> io::Result<()> {
+        private_fs::write_atomic(&self.root.join(id).join(SUMMARY_FILE), text.as_bytes())
+    }
+
+    pub fn read_summary(&self, id: &str) -> io::Result<Option<String>> {
+        match fs::read_to_string(self.root.join(id).join(SUMMARY_FILE)) {
+            Ok(text) => Ok(Some(text)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn transcript_modified(&self, id: &str) -> Option<SystemTime> {
-        fs::metadata(self.root.join(id).join(TRANSCRIPT_FILE))
+        fs::metadata(self.root.join(id).join(transcript::FILE_NAME))
             .and_then(|metadata| metadata.modified())
             .ok()
     }
@@ -118,6 +133,19 @@ mod tests {
     }
 
     #[test]
+    fn summary_round_trip() {
+        let (store, root) = temp_store();
+        store.save(&meta("a")).expect("save");
+        assert_eq!(store.read_summary("a").expect("read"), None);
+        store.save_summary("a", "## Feito").expect("save summary");
+        assert_eq!(
+            store.read_summary("a").expect("read").as_deref(),
+            Some("## Feito")
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn missing_root_loads_nothing() {
         let (store, _) = temp_store();
         assert!(store.load_all().is_empty());
@@ -137,20 +165,18 @@ mod tests {
 
     #[test]
     fn transcript_appends() {
-        use std::io::Write;
         let (store, root) = temp_store();
         store
             .open_transcript("a")
             .expect("open")
-            .write_all(b"one")
+            .append(b"one")
             .expect("write");
         store
             .open_transcript("a")
             .expect("reopen")
-            .write_all(b"two")
+            .append(b"two")
             .expect("write");
-        let transcript = fs::read_to_string(root.join("a").join(TRANSCRIPT_FILE)).expect("read");
-        assert_eq!(transcript, "onetwo");
+        assert_eq!(store.read_transcript("a", 100).expect("read"), b"onetwo");
         assert!(store.transcript_modified("a").is_some());
         fs::remove_dir_all(root).expect("cleanup");
     }
