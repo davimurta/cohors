@@ -1,9 +1,11 @@
-import { CircleCheck, FileText, Folder } from 'lucide-react';
+import { FileText, Folder } from 'lucide-react';
 import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
+import { useAppStore } from '../state/store.ts';
 import { EndedPanel } from './EndedPanel.tsx';
+import { FinishButton } from './FinishButton.tsx';
 import { isLive } from './status.ts';
 import { AGENT_LABEL, displayPath, formatElapsed, formatLastActivity } from './format.ts';
 import { useHomeDir } from './useHomeDir.ts';
@@ -14,6 +16,7 @@ export function SessionView({ session }: { session: SessionMeta }) {
   const home = useHomeDir();
   const now = useNow();
   const live = isLive(session.status);
+  const openNotes = useAppStore((state) => state.openNotes);
 
   return (
     <main className={styles.view}>
@@ -48,12 +51,13 @@ export function SessionView({ session }: { session: SessionMeta }) {
         </div>
         {live && (
           <div className={styles.actions}>
-            <Button icon={<FileText size={16} aria-hidden="true" />} disabled>
+            <Button
+              icon={<FileText size={16} aria-hidden="true" />}
+              onClick={() => openNotes(session.id)}
+            >
               Notas
             </Button>
-            <Button icon={<CircleCheck size={16} aria-hidden="true" />} disabled>
-              Finalizar
-            </Button>
+            <FinishButton session={session} label="Finalizar" />
           </div>
         )}
       </header>

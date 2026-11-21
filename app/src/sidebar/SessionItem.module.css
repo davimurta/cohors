@@ -57,7 +57,8 @@
 }
 
 .idle,
-.exited {
+.exited,
+.finished {
   color: var(--color-text-tertiary);
 }
 

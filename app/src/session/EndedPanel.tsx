@@ -1,7 +1,8 @@
-import { CircleCheck, Play, Power, RotateCcw } from 'lucide-react';
+import { Play, Power, RotateCcw } from 'lucide-react';
 import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { useAppStore } from '../state/store.ts';
+import { FinishButton } from './FinishButton.tsx';
 import styles from './EndedPanel.module.css';
 
 /** Shown instead of the terminal when the session has no running process. */
@@ -41,9 +42,11 @@ export function EndedPanel({ session }: { session: SessionMeta }) {
           >
             {resuming ? 'Retomando…' : 'Retomar sessão'}
           </Button>
-          <Button size="large" icon={<CircleCheck size={16} aria-hidden="true" />} disabled>
-            {isClaude ? 'Finalizar e gerar resumo' : 'Finalizar sessão'}
-          </Button>
+          <FinishButton
+            session={session}
+            size="large"
+            label={isClaude ? 'Finalizar e gerar resumo' : 'Finalizar sessão'}
+          />
         </div>
         {resumeError !== null && (
           <p role="alert" className={styles.error}>

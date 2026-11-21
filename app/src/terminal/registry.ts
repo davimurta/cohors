@@ -1,5 +1,5 @@
 import { FitAddon } from '@xterm/addon-fit';
-import { Terminal, type ITheme } from '@xterm/xterm';
+import { Terminal, type ITerminalOptions, type ITheme } from '@xterm/xterm';
 import type { ServerMessage } from '@cohors/protocol';
 import { daemon } from '../state/store.ts';
 
@@ -20,12 +20,7 @@ class SessionTerminal {
   constructor(id: string) {
     this.id = id;
     this.host.style.height = '100%';
-    this.terminal = new Terminal({
-      fontFamily: cssToken('--font-mono'),
-      fontSize: FONT_SIZE,
-      lineHeight: LINE_HEIGHT,
-      theme: terminalTheme(),
-    });
+    this.terminal = new Terminal(terminalOptions());
     this.terminal.loadAddon(this.fit);
     this.terminal.onData((data) => daemon.send({ type: 'session.input', id, data }));
     this.terminal.onResize(() => this.sendResize());
@@ -136,6 +131,16 @@ function syncWithSessions(ids: Set<string>): void {
       terminals.delete(id);
     }
   }
+}
+
+/** Font and colors shared by live terminals and the transcript viewer. */
+export function terminalOptions(): ITerminalOptions {
+  return {
+    fontFamily: cssToken('--font-mono'),
+    fontSize: FONT_SIZE,
+    lineHeight: LINE_HEIGHT,
+    theme: terminalTheme(),
+  };
 }
 
 function cssToken(name: string): string {

@@ -18,7 +18,8 @@
   border: 1.5px solid var(--color-idle-ring);
 }
 
-.exited {
+.exited,
+.finished {
   background: var(--color-exited-dot);
 }
 

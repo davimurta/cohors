@@ -1,6 +1,6 @@
 import type { SessionMeta } from '@cohors/protocol';
 import { StatusDot } from '../components/StatusDot.tsx';
-import { AGENT_LABEL, displayPath, formatDuration } from '../session/format.ts';
+import { AGENT_LABEL, displayPath, formatDuration, formatSpan } from '../session/format.ts';
 import { STATUS_LABEL } from '../session/status.ts';
 import styles from './SessionItem.module.css';
 
@@ -25,6 +25,9 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
         <span className={styles.name}>{session.name}</span>
         <span className={styles.detail}>
           {AGENT_LABEL[session.agent]} · {displayPath(session.cwd, home)}
+          {session.status === 'finished' && session.endedAt !== null
+            ? ` · ${formatSpan(session.createdAt, session.endedAt)}`
+            : ''}
         </span>
       </span>
       <span className={`${styles.status} ${styles[session.status]}`}>
@@ -34,8 +37,12 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
   );
 }
 
-/** "Ociosa 4 min" for idle sessions, the plain label otherwise. */
+/** "Ociosa 4 min" for idle sessions, the plain label otherwise. Finished
+ * sessions are all alike in the history, so only a summary in progress shows. */
 function statusText(session: SessionMeta, now: number): string {
+  if (session.status === 'finished') {
+    return session.summaryStatus === 'pending' ? 'Gerando resumo' : '';
+  }
   const label = STATUS_LABEL[session.status];
   if (session.status !== 'idle' || session.idleSince === null) return label;
   const duration = formatDuration(session.idleSince, now);

@@ -1,10 +1,13 @@
+import type { KeyboardEvent } from 'react';
 import { Plus } from 'lucide-react';
 import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { NEW_SESSION_KEYS, NEW_SESSION_SHORTCUT } from '../platform.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
+import { inTab, type SidebarTab } from '../state/sessions.ts';
 import { useAppStore } from '../state/store.ts';
+import { FinishedList } from './FinishedList.tsx';
 import { SessionList } from './SessionList.tsx';
 import { ShutdownAllButton } from './ShutdownAllButton.tsx';
 import styles from './Sidebar.module.css';
@@ -77,18 +80,60 @@ interface SessionsNavProps {
 }
 
 function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps) {
+  const tab = useAppStore((state) => state.sidebarTab);
+  const setTab = useAppStore((state) => state.setSidebarTab);
+  const active = sessions.filter((session) => inTab(session, 'active'));
+  const finished = sessions.filter((session) => inTab(session, 'finished'));
+  const tabs: { id: SidebarTab; label: string; count: number }[] = [
+    { id: 'active', label: 'Ativas', count: active.length },
+    { id: 'finished', label: 'Finalizadas', count: finished.length },
+  ];
+
+  // Arrow keys move between the two tabs, as in any tab list.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const next = tab === 'active' ? 'finished' : 'active';
+    setTab(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  };
+
   return (
     <>
-      <div role="tablist" aria-label="Sessões" className={styles.tabs}>
-        <button type="button" role="tab" aria-selected="true" className={styles.tab}>
-          Ativas <span className={styles.count}>{sessions.length}</span>
-        </button>
-        <button type="button" role="tab" aria-selected="false" className={styles.tab} disabled>
-          Finalizadas <span className={styles.count}>0</span>
-        </button>
+      <div role="tablist" aria-label="Sessões" className={styles.tabs} onKeyDown={onKeyDown}>
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            id={`tab-${item.id}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            aria-controls="sessions-panel"
+            tabIndex={tab === item.id ? 0 : -1}
+            className={styles.tab}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label} <span className={styles.count}>{item.count}</span>
+          </button>
+        ))}
       </div>
 
-      <SessionList sessions={sessions} selectedId={selectedId} home={home} onSelect={onSelect} />
+      <div
+        id="sessions-panel"
+        role="tabpanel"
+        aria-labelledby={`tab-${tab}`}
+        className={styles.panel}
+      >
+        {tab === 'active' ? (
+          <SessionList sessions={active} selectedId={selectedId} home={home} onSelect={onSelect} />
+        ) : (
+          <FinishedList
+            sessions={finished}
+            selectedId={selectedId}
+            home={home}
+            onSelect={onSelect}
+          />
+        )}
+      </div>
     </>
   );
 }
