@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use cohors_daemon::auth::generate_token;
 use cohors_daemon::daemon_file::{self, DaemonFile};
+use cohors_daemon::projects::Projects;
 use cohors_daemon::server::{self, DaemonState};
 use cohors_daemon::sessions::Sessions;
 use cohors_daemon::store::SessionStore;
@@ -75,7 +76,14 @@ async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let state = Arc::new(DaemonState::new(token, Arc::clone(&sessions)));
+    let home = dirs::home_dir().ok_or("no home directory")?;
+    let projects = Projects::load(data_dir.join("projects.json"), home.clone());
+    let state = Arc::new(DaemonState::new(
+        token,
+        Arc::clone(&sessions),
+        projects,
+        home,
+    ));
     tokio::select! {
         () = server::serve(listener, Arc::clone(&state)) => {}
         () = state.shutdown_requested() => eprintln!("shutdown requested"),

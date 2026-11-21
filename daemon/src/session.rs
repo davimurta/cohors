@@ -70,6 +70,8 @@ pub struct Launch {
     /// PATH for the process, so agents find their tools even when the daemon
     /// was started with a minimal environment.
     pub path: Option<std::ffi::OsString>,
+    /// Extra variables; `None` removes one the daemon inherited.
+    pub env: Vec<(String, Option<String>)>,
 }
 
 /// A live snapshot plus a receiver for every chunk after it.
@@ -281,6 +283,12 @@ fn command(launch: &Launch) -> CommandBuilder {
     if let Some(path) = &launch.path {
         command.env("PATH", path);
     }
+    for (key, value) in &launch.env {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        }
+    }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     for marker in INHERITED_AGENT_MARKERS {
@@ -335,6 +343,7 @@ mod tests {
             args: vec!["-c".into(), script.into()],
             cwd: std::env::temp_dir(),
             path: None,
+            env: Vec::new(),
         }
     }
 
@@ -372,6 +381,15 @@ mod tests {
     }
 
     #[test]
+    fn applies_extra_environment() {
+        let session = Session::new(None);
+        let mut launch = sh("printf \"[$COHORS_TEST]\"");
+        launch.env = vec![("COHORS_TEST".into(), Some("set".into()))];
+        session.start(&launch, |_| {}).expect("start");
+        assert!(wait_for_output(&session, "[set]").data.contains("[set]"));
+    }
+
+    #[test]
     fn input_without_process_is_rejected() {
         let session = Session::new(None);
         assert!(matches!(
@@ -401,7 +419,11 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
         let before = session.last_output().expect("last output");
         session.resize(100, 30).expect("resize");
-        assert!(wait_for_output(&session, "repaint").data.contains("repaint"));
+        assert!(
+            wait_for_output(&session, "repaint")
+                .data
+                .contains("repaint")
+        );
         assert_eq!(session.last_output(), Some(before));
     }
 

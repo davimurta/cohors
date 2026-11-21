@@ -88,6 +88,9 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
             idle_since: None,
+            project_id: None,
+            claude_config_dir: None,
+            ssh_key: None,
         }
     }
 

@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::executable;
-use crate::protocol::{Agent, ErrorCode, ServerMessage, SessionMeta, SessionStatus};
+use crate::protocol::{Agent, ErrorCode, Project, ServerMessage, SessionMeta, SessionStatus};
 use crate::session::{Launch, Session, SessionError};
 use crate::store::SessionStore;
 
@@ -61,6 +61,8 @@ pub struct CreateRequest {
     pub agent: Agent,
     pub cwd: String,
     pub name: Option<String>,
+    /// The session takes the project's Claude account and SSH key.
+    pub project: Option<Project>,
 }
 
 pub struct SessionEntry {
@@ -140,7 +142,7 @@ impl Sessions {
             Agent::Claude => Some(Uuid::new_v4().to_string()),
             Agent::Shell => None,
         };
-        let launch = self.launch_for(request.agent, &cwd, agent_session_id.as_deref(), false)?;
+        let project = request.project.as_ref();
         let meta = SessionMeta {
             id: Uuid::new_v4().to_string(),
             name: session_name(request.name.as_deref(), &cwd),
@@ -152,7 +154,11 @@ impl Sessions {
             created_at: now()?,
             ended_at: None,
             idle_since: None,
+            project_id: project.map(|project| project.id.clone()),
+            claude_config_dir: project.and_then(|project| project.claude_config_dir.clone()),
+            ssh_key: project.and_then(|project| project.ssh_key.clone()),
         };
+        let launch = launch_for(&self.path, &meta, &cwd, false)?;
         let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
         let started = session
             .start(&launch, self.exit_handler(&meta.id))
@@ -186,7 +192,7 @@ impl Sessions {
             return Err(SessionsError::InvalidState(meta.status));
         }
         let cwd = existing_dir(&meta.cwd)?;
-        let launch = self.launch_for(meta.agent, &cwd, meta.agent_session_id.as_deref(), true)?;
+        let launch = launch_for(&self.path, &meta, &cwd, true)?;
         entry.session.write_marker(RESUME_SEPARATOR)?;
         entry.session.start(&launch, self.exit_handler(id))?;
         meta.status = SessionStatus::Running;
@@ -234,6 +240,10 @@ impl Sessions {
         }
     }
 
+    pub fn announce_projects(&self, projects: Vec<Project>) {
+        self.announce(ServerMessage::ProjectListResult { projects });
+    }
+
     /// Moves live sessions between running and idle based on their last
     /// output. Called periodically; announces only actual changes.
     pub fn refresh_idle(&self, now: Instant) {
@@ -266,16 +276,6 @@ impl Sessions {
             drop(meta);
             self.announce(ServerMessage::SessionUpdated { session: updated });
         }
-    }
-
-    fn launch_for(
-        &self,
-        agent: Agent,
-        cwd: &Path,
-        agent_session_id: Option<&str>,
-        resume: bool,
-    ) -> Result<Launch, SessionsError> {
-        launch_for(&self.path, agent, cwd, agent_session_id, resume)
     }
 
     fn exit_handler(&self, id: &str) -> impl FnOnce(Option<u32>) + Send + 'static {
@@ -333,12 +333,11 @@ fn existing_dir(path: &str) -> Result<PathBuf, SessionsError> {
 
 fn launch_for(
     path: &OsStr,
-    agent: Agent,
+    meta: &SessionMeta,
     cwd: &Path,
-    agent_session_id: Option<&str>,
     resume: bool,
 ) -> Result<Launch, SessionsError> {
-    let (program, args) = match (agent, agent_session_id) {
+    let (program, args) = match (meta.agent, meta.agent_session_id.as_deref()) {
         (Agent::Claude, Some(id)) => {
             let program =
                 executable::find_in(path, CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
@@ -355,7 +354,28 @@ fn launch_for(
         args,
         cwd: cwd.to_path_buf(),
         path: Some(path.to_os_string()),
+        env: environment(meta),
     })
+}
+
+/// Account and SSH key of the session's project. Without a project the
+/// default Claude account is used, even if the daemon inherited another.
+/// Shells get them too, so `claude` and `git` run inside them match.
+fn environment(meta: &SessionMeta) -> Vec<(String, Option<String>)> {
+    let mut env = vec![(
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        meta.claude_config_dir.clone(),
+    )];
+    if let Some(key) = &meta.ssh_key {
+        env.push(("GIT_SSH_COMMAND".to_owned(), Some(ssh_command(key))));
+    }
+    env
+}
+
+fn ssh_command(key: &str) -> String {
+    // Single quotes keep spaces in the path; embedded quotes are escaped.
+    let quoted = key.replace('\'', "'\\''");
+    format!("ssh -i '{quoted}' -o IdentitiesOnly=yes")
 }
 
 /// Uses the given name, or the folder name when it is blank.
@@ -398,6 +418,7 @@ mod tests {
             agent: Agent::Shell,
             cwd: std::env::temp_dir().display().to_string(),
             name: Some(name.into()),
+            project: None,
         }
     }
 
@@ -438,20 +459,51 @@ mod tests {
     #[test]
     fn claude_resume_uses_resume_flag() {
         let path = std::env::var_os("PATH").unwrap_or_default();
-        let Ok(launch) = launch_for(&path, Agent::Claude, Path::new("/tmp"), Some("abc"), true)
-        else {
+        let meta = SessionMeta {
+            agent: Agent::Claude,
+            agent_session_id: Some("abc".into()),
+            ..meta("s")
+        };
+        let Ok(launch) = launch_for(&path, &meta, Path::new("/tmp"), true) else {
             return; // claude is not installed on this machine
         };
         assert_eq!(launch.args, ["--resume", "abc"]);
     }
 
     #[test]
-    fn running_sessions_load_as_interrupted() {
-        let root = temp_root();
-        let store = SessionStore::new(root.clone());
-        let mut meta = SessionMeta {
-            id: "a".into(),
-            name: "a".into(),
+    fn project_environment_sets_account_and_ssh_key() {
+        let meta = SessionMeta {
+            claude_config_dir: Some("/home/me/.claude-work".into()),
+            ssh_key: Some("/home/me/.ssh/it's key".into()),
+            ..meta("s")
+        };
+        assert_eq!(
+            environment(&meta),
+            [
+                (
+                    "CLAUDE_CONFIG_DIR".to_owned(),
+                    Some("/home/me/.claude-work".to_owned())
+                ),
+                (
+                    "GIT_SSH_COMMAND".to_owned(),
+                    Some("ssh -i '/home/me/.ssh/it'\\''s key' -o IdentitiesOnly=yes".to_owned())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_account_clears_inherited_config_dir() {
+        assert_eq!(
+            environment(&meta("s")),
+            [("CLAUDE_CONFIG_DIR".to_owned(), None)]
+        );
+    }
+
+    fn meta(id: &str) -> SessionMeta {
+        SessionMeta {
+            id: id.into(),
+            name: id.into(),
             agent: Agent::Shell,
             cwd: "/tmp".into(),
             agent_session_id: None,
@@ -460,7 +512,17 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
             idle_since: None,
-        };
+            project_id: None,
+            claude_config_dir: None,
+            ssh_key: None,
+        }
+    }
+
+    #[test]
+    fn running_sessions_load_as_interrupted() {
+        let root = temp_root();
+        let store = SessionStore::new(root.clone());
+        let mut meta = meta("a");
         store.save(&meta).expect("save");
         meta.id = "b".into();
         meta.status = SessionStatus::Exited;
@@ -483,6 +545,7 @@ mod tests {
             agent: Agent::Shell,
             cwd: "/definitely/not/here".into(),
             name: None,
+            project: None,
         });
         assert!(matches!(result, Err(SessionsError::InvalidCwd(_))));
     }

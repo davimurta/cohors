@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,9 +14,13 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 
+use crate::accounts;
 use crate::auth::{origin_allowed, token_matches};
-use crate::protocol::{ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage};
-use crate::sessions::{CreateRequest, Sessions, SessionsError};
+use crate::projects::{Projects, ProjectsError};
+use crate::protocol::{
+    Agent, ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage,
+};
+use crate::sessions::{CreateRequest, Sessions};
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTGOING_QUEUE: usize = 256;
@@ -27,14 +32,18 @@ type Outgoing = mpsc::Sender<ServerMessage>;
 pub struct DaemonState {
     token: String,
     sessions: Arc<Sessions>,
+    projects: Projects,
+    home: PathBuf,
     shutdown_requested: Notify,
 }
 
 impl DaemonState {
-    pub fn new(token: String, sessions: Arc<Sessions>) -> Self {
+    pub fn new(token: String, sessions: Arc<Sessions>, projects: Projects, home: PathBuf) -> Self {
         Self {
             token,
             sessions,
+            projects,
+            home,
             shutdown_requested: Notify::new(),
         }
     }
@@ -181,16 +190,17 @@ async fn handle_message(
         ClientMessage::SessionList => Some(ServerMessage::SessionListResult {
             sessions: state.sessions.list(),
         }),
-        ClientMessage::SessionCreate { agent, cwd, name } => state
-            .sessions
-            .create(CreateRequest { agent, cwd, name })
-            .err()
-            .map(|error| request_error(&error, "session.create")),
+        ClientMessage::SessionCreate {
+            agent,
+            cwd,
+            name,
+            project_id,
+        } => create_session(state, agent, cwd, name, project_id),
         ClientMessage::SessionResume { id } => state
             .sessions
             .resume(&id)
             .err()
-            .map(|error| request_error(&error, &id)),
+            .map(|error| request_error(error.code(), &error, &id)),
         ClientMessage::SessionAttach { id } => {
             if state.sessions.get(&id).is_some() {
                 let task = tokio::spawn(forward_output(
@@ -225,16 +235,85 @@ async fn handle_message(
             state.shutdown_requested.notify_one();
             None
         }
+        ClientMessage::AccountsList => Some(ServerMessage::AccountsListResult {
+            claude_accounts: accounts::claude_accounts(&state.home),
+            ssh_keys: accounts::ssh_keys(&state.home),
+        }),
+        ClientMessage::ProjectList => Some(ServerMessage::ProjectListResult {
+            projects: state.projects.list(),
+        }),
+        ClientMessage::ProjectCreate { project } => {
+            project_changed(state, state.projects.create(project), "project.create")
+        }
+        ClientMessage::ProjectUpdate { id, project } => {
+            project_changed(state, state.projects.update(&id, project), &id)
+        }
+        ClientMessage::ProjectDelete { id } => {
+            project_changed(state, state.projects.delete(&id), &id)
+        }
     };
     if let Some(reply) = reply {
         let _ = outgoing.send(reply).await;
     }
 }
 
+fn create_session(
+    state: &DaemonState,
+    agent: Agent,
+    cwd: String,
+    name: Option<String>,
+    project_id: Option<String>,
+) -> Option<ServerMessage> {
+    const REFERENCE: &str = "session.create";
+    let project = match project_id {
+        Some(id) => match state.projects.get(&id) {
+            Some(project) => Some(project),
+            None => {
+                return Some(ServerMessage::error(
+                    ErrorCode::ProjectNotFound,
+                    "project not found",
+                    Some(REFERENCE.into()),
+                ));
+            }
+        },
+        None => None,
+    };
+    let request = CreateRequest {
+        agent,
+        cwd,
+        name,
+        project,
+    };
+    state
+        .sessions
+        .create(request)
+        .err()
+        .map(|error| request_error(error.code(), &error, REFERENCE))
+}
+
+/// After a project change every client gets the full list.
+fn project_changed<T>(
+    state: &DaemonState,
+    result: Result<T, ProjectsError>,
+    reference: &str,
+) -> Option<ServerMessage> {
+    match result {
+        Ok(_) => {
+            state.sessions.announce_projects(state.projects.list());
+            None
+        }
+        Err(error) => Some(request_error(error.code(), &error, reference)),
+    }
+}
+
 /// Successes reach every client as events; only failures go back to the
 /// requester, with `ref` naming the session or request.
-fn request_error(error: &SessionsError, reference: &str) -> ServerMessage {
-    ServerMessage::error(error.code(), error.to_string(), Some(reference.to_owned()))
+fn request_error(
+    code: ErrorCode,
+    error: &impl std::fmt::Display,
+    reference: &str,
+) -> ServerMessage {
+    ServerMessage::error(code, error.to_string(), Some(reference.to_owned()))
 }
 
 fn internal_error<E: std::fmt::Display>(

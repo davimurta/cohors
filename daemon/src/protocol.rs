@@ -28,6 +28,7 @@ pub enum ClientMessage {
         agent: Agent,
         cwd: String,
         name: Option<String>,
+        project_id: Option<String>,
     },
     #[serde(rename = "session.attach")]
     SessionAttach { id: String },
@@ -41,6 +42,57 @@ pub enum ClientMessage {
     SessionResize { id: String, cols: u16, rows: u16 },
     #[serde(rename = "daemon.shutdown")]
     DaemonShutdown,
+    #[serde(rename = "accounts.list")]
+    AccountsList,
+    #[serde(rename = "project.list")]
+    ProjectList,
+    #[serde(rename = "project.create")]
+    ProjectCreate { project: ProjectSettings },
+    #[serde(rename = "project.update")]
+    ProjectUpdate {
+        id: String,
+        project: ProjectSettings,
+    },
+    #[serde(rename = "project.delete")]
+    ProjectDelete { id: String },
+}
+
+/// Editable part of a project.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettings {
+    pub name: String,
+    pub root: String,
+    /// Claude Code config folder for `CLAUDE_CONFIG_DIR`; None is the default account.
+    pub claude_config_dir: Option<String>,
+    /// Private key path for `GIT_SSH_COMMAND`; None keeps the system SSH setup.
+    pub ssh_key: Option<String>,
+}
+
+/// Also the on-disk format of `projects.json` entries.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub root: String,
+    pub claude_config_dir: Option<String>,
+    pub ssh_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeAccount {
+    pub config_dir: Option<String>,
+    pub email: Option<String>,
+    pub organization: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKey {
+    pub name: String,
+    pub path: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -77,6 +129,11 @@ pub struct SessionMeta {
     pub ended_at: Option<String>,
     /// Time of the last output while the session is idle.
     pub idle_since: Option<String>,
+    /// Project and environment captured when the session was created, so
+    /// resuming uses the same account even if the project changes later.
+    pub project_id: Option<String>,
+    pub claude_config_dir: Option<String>,
+    pub ssh_key: Option<String>,
 }
 
 impl SessionStatus {
@@ -93,6 +150,7 @@ pub enum ErrorCode {
     UnsupportedProtocol,
     BadRequest,
     SessionNotFound,
+    ProjectNotFound,
     InvalidCwd,
     AgentNotFound,
     InvalidState,
@@ -114,6 +172,14 @@ pub enum ServerMessage {
     SessionCreated { session: SessionMeta },
     #[serde(rename = "session.updated")]
     SessionUpdated { session: SessionMeta },
+    #[serde(rename = "accounts.list.result")]
+    AccountsListResult {
+        claude_accounts: Vec<ClaudeAccount>,
+        ssh_keys: Vec<SshKey>,
+    },
+    /// Reply to `project.list`, and sent to every client after a change.
+    #[serde(rename = "project.list.result")]
+    ProjectListResult { projects: Vec<Project> },
     #[serde(rename = "session.snapshot")]
     SessionSnapshot { id: String, seq: u64, data: String },
     #[serde(rename = "session.output")]
@@ -179,7 +245,8 @@ mod tests {
             ClientMessage::SessionCreate {
                 agent: Agent::Shell,
                 cwd: "/tmp".into(),
-                name: None
+                name: None,
+                project_id: None
             }
         );
     }
@@ -197,6 +264,9 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             ended_at: None,
             idle_since: None,
+            project_id: None,
+            claude_config_dir: None,
+            ssh_key: None,
         };
         let value = serde_json::to_value(ServerMessage::SessionCreated { session: meta })
             .expect("serialize");
@@ -214,10 +284,26 @@ mod tests {
                     "exitCode": null,
                     "createdAt": "2026-01-01T00:00:00Z",
                     "endedAt": null,
-                    "idleSince": null
+                    "idleSince": null,
+                    "projectId": null,
+                    "claudeConfigDir": null,
+                    "sshKey": null
                 }
             })
         );
+    }
+
+    #[test]
+    fn parses_project_create() {
+        let message = parse(json!({
+            "type": "project.create",
+            "project": {"name": "api", "root": "/dev/api", "claudeConfigDir": null, "sshKey": "/k"}
+        }));
+        let ClientMessage::ProjectCreate { project } = message else {
+            panic!("expected project.create");
+        };
+        assert_eq!(project.ssh_key.as_deref(), Some("/k"));
+        assert_eq!(project.claude_config_dir, None);
     }
 
     #[test]
