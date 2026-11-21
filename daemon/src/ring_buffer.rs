@@ -1,9 +1,13 @@
 use std::collections::VecDeque;
 
+use crate::terminal_modes::TerminalModes;
+
 /// Recent terminal output of a session, stored as whole chunks so that
-/// eviction never splits a UTF-8 character.
+/// eviction never splits a UTF-8 character. Modes set by evicted output are
+/// kept so the snapshot still starts in the right terminal state.
 pub struct RingBuffer {
     chunks: VecDeque<String>,
+    evicted_modes: TerminalModes,
     bytes: usize,
     capacity: usize,
     last_seq: u64,
@@ -18,6 +22,7 @@ impl RingBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
             chunks: VecDeque::new(),
+            evicted_modes: TerminalModes::default(),
             bytes: 0,
             capacity,
             last_seq: 0,
@@ -32,13 +37,15 @@ impl RingBuffer {
         while self.bytes > self.capacity && self.chunks.len() > 1 {
             if let Some(evicted) = self.chunks.pop_front() {
                 self.bytes -= evicted.len();
+                self.evicted_modes.observe(&evicted);
             }
         }
         self.last_seq
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        let mut data = String::with_capacity(self.bytes);
+        let mut data = self.evicted_modes.replay();
+        data.reserve(self.bytes);
         for chunk in &self.chunks {
             data.push_str(chunk);
         }
@@ -86,6 +93,14 @@ mod tests {
         buffer.push("ab".into());
         buffer.push("cdef".into());
         assert_eq!(buffer.snapshot().data, "cdef");
+    }
+
+    #[test]
+    fn snapshot_restores_modes_from_evicted_output() {
+        let mut buffer = RingBuffer::new(8);
+        buffer.push("\x1b[?1049h".into());
+        buffer.push("12345678".into());
+        assert_eq!(buffer.snapshot().data, "\x1b[?1049h12345678");
     }
 
     #[test]
