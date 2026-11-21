@@ -6,11 +6,12 @@ import { ConfirmDialog } from '../components/ConfirmDialog.tsx';
 import { Dialog } from '../components/Dialog.tsx';
 import field from '../components/Field.module.css';
 import { FolderField } from '../components/FolderField.tsx';
+import { Select } from '../components/Select.tsx';
 import { useAppStore } from '../state/store.ts';
 import { accountLabel, folderName } from './labels.ts';
 import styles from './ProjectDialog.module.css';
 
-// <select> values are strings, so the default account and key need a stand-in.
+// Select values are strings, so the default account and key need a stand-in.
 const DEFAULT_OPTION = '';
 
 export function ProjectDialog() {
@@ -44,7 +45,15 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
   const [account, setAccount] = useState(project?.claudeConfigDir ?? DEFAULT_OPTION);
   const [sshKey, setSshKey] = useState(project?.sshKey ?? DEFAULT_OPTION);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const ids = { name: useId(), root: useId(), account: useId(), key: useId(), keyHint: useId() };
+  const ids = {
+    name: useId(),
+    root: useId(),
+    account: useId(),
+    accountLabel: useId(),
+    key: useId(),
+    keyLabel: useId(),
+    keyHint: useId(),
+  };
   const complete = name.trim() !== '' && root !== '';
 
   const submit = (event: FormEvent) => {
@@ -81,41 +90,36 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
       <FolderField id={ids.root} label="Pasta raiz" value={root} onChange={chooseRoot} />
 
       <div className={field.field}>
-        <label htmlFor={ids.account} className={field.label}>
+        <label id={ids.accountLabel} htmlFor={ids.account} className={field.label}>
           Conta do Claude
         </label>
-        <select
+        <Select
           id={ids.account}
-          className={field.control}
+          labelId={ids.accountLabel}
           value={account}
-          onChange={(event) => setAccount(event.target.value)}
-        >
-          {accounts.map((candidate) => (
-            <option key={candidate.configDir ?? DEFAULT_OPTION} value={candidate.configDir ?? DEFAULT_OPTION}>
-              {accountLabel(candidate)}
-            </option>
-          ))}
-        </select>
+          options={accounts.map((candidate) => ({
+            value: candidate.configDir ?? DEFAULT_OPTION,
+            label: accountLabel(candidate),
+          }))}
+          onChange={setAccount}
+        />
       </div>
 
       <div className={field.field}>
-        <label htmlFor={ids.key} className={field.label}>
+        <label id={ids.keyLabel} htmlFor={ids.key} className={field.label}>
           Chave SSH
         </label>
-        <select
+        <Select
           id={ids.key}
-          className={field.control}
+          labelId={ids.keyLabel}
           value={sshKey}
           aria-describedby={ids.keyHint}
-          onChange={(event) => setSshKey(event.target.value)}
-        >
-          <option value={DEFAULT_OPTION}>Configuração padrão do sistema</option>
-          {keys.map((key) => (
-            <option key={key.path} value={key.path}>
-              {key.name}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: DEFAULT_OPTION, label: 'Configuração padrão do sistema' },
+            ...keys.map((key) => ({ value: key.path, label: key.name })),
+          ]}
+          onChange={setSshKey}
+        />
         <span id={ids.keyHint} className={field.hint}>
           Usada pelo git nas sessões deste projeto.
         </span>

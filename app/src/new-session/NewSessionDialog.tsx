@@ -5,6 +5,7 @@ import { Button } from '../components/Button.tsx';
 import { Dialog } from '../components/Dialog.tsx';
 import field from '../components/Field.module.css';
 import { FolderField } from '../components/FolderField.tsx';
+import { Select } from '../components/Select.tsx';
 import { environmentSummary, folderName } from '../projects/labels.ts';
 import { useAppStore } from '../state/store.ts';
 import styles from './NewSessionDialog.module.css';
@@ -56,6 +57,7 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
   const ids = {
     agent: useId(),
     project: useId(),
+    projectLabel: useId(),
     projectHint: useId(),
     folder: useId(),
     name: useId(),
@@ -113,23 +115,20 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
 
       {projects.length > 0 && (
         <div className={field.field}>
-          <label htmlFor={ids.project} className={field.label}>
+          <label id={ids.projectLabel} htmlFor={ids.project} className={field.label}>
             Projeto
           </label>
-          <select
+          <Select
             id={ids.project}
-            className={field.control}
+            labelId={ids.projectLabel}
             value={projectId}
             aria-describedby={ids.projectHint}
-            onChange={(event) => changeProject(event.target.value)}
-          >
-            <option value={NO_PROJECT}>Nenhum</option>
-            {projects.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: NO_PROJECT, label: 'Nenhum' },
+              ...projects.map((candidate) => ({ value: candidate.id, label: candidate.name })),
+            ]}
+            onChange={changeProject}
+          />
           <span id={ids.projectHint} className={field.hint}>
             {project === undefined
               ? 'Sem projeto, a sessão usa a conta padrão do Claude.'
