@@ -38,7 +38,8 @@ export type ClientMessage =
   | { type: 'session.resume'; id: string }
   | { type: 'session.detach'; id: string }
   | { type: 'session.input'; id: string; data: string }
-  | { type: 'session.resize'; id: string; cols: number; rows: number };
+  | { type: 'session.resize'; id: string; cols: number; rows: number }
+  | { type: 'daemon.shutdown' };
 
 export type ServerMessage =
   | { type: 'ready'; protocolVersion: number; daemonVersion: string; claudeAvailable: boolean }

@@ -1,6 +1,6 @@
 # Cohors protocol
 
-JSON messages over a WebSocket on `127.0.0.1`. The daemon writes its port and token to `daemon.json` in the user data directory (owner-only permissions). Only allowlisted `Origin` values may connect.
+JSON messages over a WebSocket on `127.0.0.1`. The daemon writes its port, token and pid to `daemon.json` in the user data directory (owner-only permissions). Only allowlisted `Origin` values may connect.
 
 TypeScript types live in `index.ts`; the Rust side is `daemon/src/protocol.rs`.
 
@@ -29,6 +29,13 @@ The daemon answers `ready` with its versions and whether `claude` is in its PATH
 Output chunks carry a `seq` that increases by one per chunk within a session. The snapshot holds the recent output ring buffer and the `seq` of its last chunk, and the live stream continues at `seq + 1`, with no gaps or duplicates. A client that falls behind receives a fresh snapshot.
 
 Failures are reported as `error {code, message, ref?}`. `ref` is the session id when one is involved, or the request type (`session.create`) otherwise. `session.create` fails with `invalid_cwd` when the folder does not exist and `agent_not_found` when `claude` is not installed. `session.resume` fails with `invalid_state` when the session is not exited or interrupted.
+
+## Daemon lifecycle
+
+- One daemon per user: it holds an exclusive lock on `daemon.lock` while alive.
+- `cohors-daemon` runs in the foreground. `cohors-daemon --detach` starts it in its own process group, logging to `daemon.log`, and returns once it accepts connections (or right away if one is already running). `cohors-daemon --stop` asks the running daemon to shut down and kills it if it does not.
+- `daemon.shutdown`, SIGTERM and Ctrl+C all shut down cleanly: `daemon.json` is removed, running sessions are saved as `interrupted`, their processes get SIGHUP and, after 3 seconds, a hard kill.
+- The daemon reads PATH from the user's login shell, so agents are found even when the app was opened from the Finder.
 
 ## Session states and storage
 
