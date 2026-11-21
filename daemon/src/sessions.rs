@@ -78,7 +78,8 @@ impl Sessions {
             Agent::Shell => None,
         };
         let launch = launch_for(request.agent, &cwd, agent_session_id.as_deref())?;
-        let session = Session::spawn(&launch)?;
+        let session = Session::new(None);
+        session.start(&launch, |_| {})?;
         let meta = SessionMeta {
             id: Uuid::new_v4().to_string(),
             name: session_name(request.name.as_deref(), &cwd),

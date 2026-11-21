@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -43,8 +44,8 @@ pub enum SessionError {
     OpenPty(String),
     #[error("failed to spawn process: {0}")]
     Spawn(String),
-    #[error("session input is closed")]
-    InputClosed,
+    #[error("session has no running process")]
+    NotRunning,
     #[error("failed to resize pty: {0}")]
     Resize(String),
     #[error("session state lock poisoned")]
@@ -73,16 +74,57 @@ pub struct Attachment {
 struct Output {
     buffer: RingBuffer,
     live: broadcast::Sender<OutputChunk>,
+    transcript: Option<File>,
 }
 
+impl Output {
+    fn push(&mut self, data: String) {
+        if let Some(transcript) = &mut self.transcript {
+            // A failed transcript write must not stop the live terminal.
+            if let Err(error) = transcript.write_all(data.as_bytes()) {
+                eprintln!("failed to write transcript: {error}");
+                self.transcript = None;
+            }
+        }
+        let seq = self.buffer.push(data.clone());
+        // No receivers simply means nobody is attached right now.
+        let _ = self.live.send(OutputChunk { seq, data });
+    }
+}
+
+struct Process {
+    input: mpsc::Sender<Vec<u8>>,
+    master: Box<dyn MasterPty + Send>,
+}
+
+/// Terminal output of a session plus the process currently feeding it.
+/// Resuming starts a new process on the same output, so attached clients
+/// keep streaming across restarts.
 pub struct Session {
     output: Arc<Mutex<Output>>,
-    input: mpsc::Sender<Vec<u8>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    process: Mutex<Option<Process>>,
 }
 
 impl Session {
-    pub fn spawn(launch: &Launch) -> Result<Self, SessionError> {
+    pub fn new(transcript: Option<File>) -> Self {
+        let (live, _) = broadcast::channel(LIVE_CHANNEL_CHUNKS);
+        Self {
+            output: Arc::new(Mutex::new(Output {
+                buffer: RingBuffer::new(RING_BUFFER_BYTES),
+                live,
+                transcript,
+            })),
+            process: Mutex::new(None),
+        }
+    }
+
+    /// Runs `launch` in a new PTY. `on_exit` gets the exit code once the
+    /// process ends and its output is fully read.
+    pub fn start(
+        &self,
+        launch: &Launch,
+        on_exit: impl FnOnce(Option<u32>) + Send + 'static,
+    ) -> Result<(), SessionError> {
         let pair = native_pty_system()
             .openpty(INITIAL_SIZE)
             .map_err(|error| SessionError::OpenPty(error.to_string()))?;
@@ -102,19 +144,11 @@ impl Session {
             .take_writer()
             .map_err(|error| SessionError::OpenPty(error.to_string()))?;
 
-        let (live, _) = broadcast::channel(LIVE_CHANNEL_CHUNKS);
-        let output = Arc::new(Mutex::new(Output {
-            buffer: RingBuffer::new(RING_BUFFER_BYTES),
-            live,
-        }));
-
-        let reader_output = Arc::clone(&output);
+        let output = Arc::clone(&self.output);
         thread::spawn(move || {
-            pump_output(reader, &reader_output);
-            match child.wait() {
-                Ok(status) => eprintln!("session process exited: {status:?}"),
-                Err(error) => eprintln!("failed to wait for session process: {error}"),
-            }
+            pump_output(reader, &output);
+            let exit_code = child.wait().ok().map(|status| status.exit_code());
+            on_exit(exit_code);
         });
 
         // Writes block when the child stops reading, so they get their own
@@ -122,11 +156,11 @@ impl Session {
         let (input, pending_input) = mpsc::channel();
         thread::spawn(move || pump_input(writer, &pending_input));
 
-        Ok(Self {
-            output,
+        *lock(&self.process)? = Some(Process {
             input,
-            master: Mutex::new(pair.master),
-        })
+            master: pair.master,
+        });
+        Ok(())
     }
 
     /// Snapshot and subscription are taken under the same lock, so the live
@@ -139,14 +173,26 @@ impl Session {
         })
     }
 
+    /// Adds text that did not come from the process, such as a separator.
+    pub fn write_marker(&self, text: &str) -> Result<(), SessionError> {
+        lock(&self.output)?.push(text.to_owned());
+        Ok(())
+    }
+
     pub fn write_input(&self, data: &str) -> Result<(), SessionError> {
-        self.input
+        let process = lock(&self.process)?;
+        let process = process.as_ref().ok_or(SessionError::NotRunning)?;
+        process
+            .input
             .send(data.as_bytes().to_vec())
-            .map_err(|_| SessionError::InputClosed)
+            .map_err(|_| SessionError::NotRunning)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), SessionError> {
-        lock(&self.master)?
+        let process = lock(&self.process)?;
+        let process = process.as_ref().ok_or(SessionError::NotRunning)?;
+        process
+            .master
             .resize(PtySize {
                 rows,
                 cols,
@@ -199,9 +245,7 @@ fn pump_output(mut reader: Box<dyn Read + Send>, output: &Mutex<Output>) {
         let Ok(mut output) = output.lock() else {
             return;
         };
-        let seq = output.buffer.push(data.clone());
-        // No receivers simply means nobody is attached right now.
-        let _ = output.live.send(OutputChunk { seq, data });
+        output.push(data);
     }
 }
 
@@ -222,6 +266,12 @@ mod tests {
         }
     }
 
+    fn started(script: &str) -> Session {
+        let session = Session::new(None);
+        session.start(&sh(script), |_| {}).expect("start");
+        session
+    }
+
     fn wait_for_output(session: &Session, needle: &str) -> Snapshot {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -235,7 +285,7 @@ mod tests {
 
     #[test]
     fn captures_process_output_in_snapshot() {
-        let session = Session::spawn(&sh("printf cohors-ok")).expect("spawn");
+        let session = started("printf cohors-ok");
         let snapshot = wait_for_output(&session, "cohors-ok");
         assert!(snapshot.data.contains("cohors-ok"));
         assert!(snapshot.seq >= 1);
@@ -243,15 +293,64 @@ mod tests {
 
     #[test]
     fn forwards_input_to_process() {
-        let session = Session::spawn(&sh("read line; printf \"got:%s\" \"$line\"")).expect("spawn");
+        let session = started("read line; printf \"got:%s\" \"$line\"");
         session.write_input("ping\r").expect("write");
         let snapshot = wait_for_output(&session, "got:ping");
         assert!(snapshot.data.contains("got:ping"));
     }
 
     #[test]
+    fn input_without_process_is_rejected() {
+        let session = Session::new(None);
+        assert!(matches!(
+            session.write_input("x"),
+            Err(SessionError::NotRunning)
+        ));
+    }
+
+    #[test]
+    fn reports_exit_code() {
+        let session = Session::new(None);
+        let (sender, receiver) = mpsc::channel();
+        session
+            .start(&sh("exit 3"), move |code| {
+                let _ = sender.send(code);
+            })
+            .expect("start");
+        let code = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("exit reported");
+        assert_eq!(code, Some(3));
+    }
+
+    #[test]
+    fn restart_keeps_previous_output() {
+        let session = started("printf first");
+        wait_for_output(&session, "first");
+        session.write_marker("|marker|").expect("marker");
+        session
+            .start(&sh("printf second"), |_| {})
+            .expect("restart");
+        let snapshot = wait_for_output(&session, "second");
+        let first = snapshot.data.find("first").expect("first");
+        let marker = snapshot.data.find("|marker|").expect("marker");
+        assert!(first < marker && marker < snapshot.data.find("second").expect("second"));
+    }
+
+    #[test]
+    fn writes_output_to_transcript() {
+        let path = std::env::temp_dir().join(format!("cohors-transcript-{}", uuid::Uuid::new_v4()));
+        let session = Session::new(Some(File::create(&path).expect("create")));
+        session.start(&sh("printf logged"), |_| {}).expect("start");
+        wait_for_output(&session, "logged");
+        let transcript = std::fs::read_to_string(&path).expect("read");
+        assert!(transcript.contains("logged"));
+        std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
     fn live_stream_continues_after_snapshot_seq() {
-        let session = Session::spawn(&sh("read line; printf after")).expect("spawn");
+        let session = started("read line; printf after");
         let mut attachment = session.attach().expect("attach");
         session.write_input("x\r").expect("write");
         let runtime = tokio::runtime::Builder::new_current_thread()
