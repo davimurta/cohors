@@ -1,4 +1,5 @@
 import type { Project, SessionMeta } from '@cohors/protocol';
+import { inTab } from '../state/sessions.ts';
 
 export interface SessionGroup {
   /** null holds sessions without a project, or whose project was deleted. */
@@ -21,4 +22,10 @@ export function groupSessions(sessions: SessionMeta[], projects: Project[]): Ses
   );
   if (loose.length > 0 || groups.length === 0) groups.push({ project: null, sessions: loose });
   return groups;
+}
+
+/** Active sessions in the order the sidebar lists them. */
+export function sidebarOrder(sessions: SessionMeta[], projects: Project[]): SessionMeta[] {
+  const active = sessions.filter((session) => inTab(session, 'active'));
+  return groupSessions(active, projects).flatMap((group) => group.sessions);
 }

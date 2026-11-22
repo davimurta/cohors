@@ -12,6 +12,7 @@ import styles from './App.module.css';
 import { MainView } from './MainView.tsx';
 import { useAttentionNotifications } from './useAttentionNotifications.ts';
 import { useNewSessionShortcut } from './useNewSessionShortcut.ts';
+import { useSessionShortcuts } from './useSessionShortcuts.ts';
 
 export function App() {
   const connection = useAppStore((state) => state.connection);
@@ -19,6 +20,7 @@ export function App() {
 
   useNewSessionShortcut();
   useAttentionNotifications();
+  useSessionShortcuts();
 
   useEffect(() => {
     const stopRouting = startTerminalRouting();
