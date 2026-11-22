@@ -171,10 +171,17 @@ impl Session {
         let killer = child.clone_killer();
         let pid = child.process_id();
         let alive = Arc::new(AtomicBool::new(true));
+        // Writes block when the child stops reading, so they get their own
+        // thread instead of stalling the async runtime.
+        let (input, pending_input) = mpsc::channel();
+        thread::spawn(move || pump_input(writer, &pending_input));
+
         let output = Arc::clone(&self.output);
+        // ConPTY asks for the cursor position on start and waits for the reply.
+        let handshake = cfg!(windows).then(|| input.clone());
         let (reader_done, reader_finished) = mpsc::channel::<()>();
         thread::spawn(move || {
-            pump_output(reader, &output);
+            pump_output(reader, &output, handshake);
             let _ = reader_done.send(());
         });
         // Waiting for the child apart from reading: ConPTY on Windows keeps
@@ -187,11 +194,6 @@ impl Session {
             let _ = reader_finished.recv_timeout(OUTPUT_DRAIN);
             on_exit(exit_code);
         });
-
-        // Writes block when the child stops reading, so they get their own
-        // thread instead of stalling the async runtime.
-        let (input, pending_input) = mpsc::channel();
-        thread::spawn(move || pump_input(writer, &pending_input));
 
         *lock(&self.process)? = Some(Process {
             input,
@@ -325,7 +327,29 @@ fn pump_input(mut writer: Box<dyn Write + Send>, pending: &mpsc::Receiver<Vec<u8
     }
 }
 
-fn pump_output(mut reader: Box<dyn Read + Send>, output: &Mutex<Output>) {
+/// Cursor position query ConPTY sends once when it starts.
+const CURSOR_QUERY: &str = "\x1b[6n";
+/// Answer to it: top left, as for a fresh screen.
+const CURSOR_REPLY: &[u8] = b"\x1b[1;1R";
+
+/// Removes the first cursor position query from `data`, if any. Answering
+/// it here, instead of leaving it to whichever client is attached, avoids
+/// clients replying again each time a snapshot replays it.
+fn take_cursor_query(data: &mut String) -> bool {
+    match data.find(CURSOR_QUERY) {
+        Some(index) => {
+            data.replace_range(index..index + CURSOR_QUERY.len(), "");
+            true
+        }
+        None => false,
+    }
+}
+
+fn pump_output(
+    mut reader: Box<dyn Read + Send>,
+    output: &Mutex<Output>,
+    mut handshake: Option<mpsc::Sender<Vec<u8>>>,
+) {
     let mut decoder = Utf8Decoder::default();
     let mut bytes = vec![0u8; READ_CHUNK_BYTES];
     loop {
@@ -333,7 +357,13 @@ fn pump_output(mut reader: Box<dyn Read + Send>, output: &Mutex<Output>) {
             Ok(0) | Err(_) => return,
             Ok(read) => read,
         };
-        let data = decoder.decode(&bytes[..read]);
+        let mut data = decoder.decode(&bytes[..read]);
+        if let Some(input) = &handshake
+            && take_cursor_query(&mut data)
+        {
+            let _ = input.send(CURSOR_REPLY.to_vec());
+            handshake = None;
+        }
         if data.is_empty() {
             continue;
         }
@@ -346,6 +376,21 @@ fn pump_output(mut reader: Box<dyn Read + Send>, output: &Mutex<Output>) {
 
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionError> {
     mutex.lock().map_err(|_| SessionError::Poisoned)
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+
+    #[test]
+    fn takes_only_the_first_cursor_query() {
+        let mut data = String::from("a\x1b[6nb\x1b[6n");
+        assert!(take_cursor_query(&mut data));
+        assert_eq!(data, "ab\x1b[6n");
+        let mut plain = String::from("plain");
+        assert!(!take_cursor_query(&mut plain));
+        assert_eq!(plain, "plain");
+    }
 }
 
 #[cfg(all(test, unix))]
