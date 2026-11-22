@@ -6,6 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 use uuid::Uuid;
 
 use crate::accounts;
+use crate::context::{self, ContextFiles};
 use crate::private_fs;
 use crate::protocol::{ErrorCode, Project, ProjectSettings};
 
@@ -21,6 +22,8 @@ pub enum ProjectsError {
     UnknownAccount(String),
     #[error("unknown SSH key: {0}")]
     UnknownSshKey(String),
+    #[error("context folder does not exist: {0}")]
+    InvalidContextDir(String),
     #[error("failed to save projects: {0}")]
     Io(#[from] io::Error),
     #[error("project list lock poisoned")]
@@ -31,7 +34,7 @@ impl ProjectsError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::NotFound => ErrorCode::ProjectNotFound,
-            Self::InvalidRoot(_) => ErrorCode::InvalidCwd,
+            Self::InvalidRoot(_) | Self::InvalidContextDir(_) => ErrorCode::InvalidCwd,
             Self::EmptyName | Self::UnknownAccount(_) | Self::UnknownSshKey(_) => {
                 ErrorCode::BadRequest
             }
@@ -42,6 +45,8 @@ impl ProjectsError {
 
 /// Projects saved in `projects.json`. Accounts and keys are checked against
 /// what exists in the user's home, so a project can only point at real ones.
+/// Context files of projects without their own folder live in
+/// `contexts/<id>` next to `projects.json`.
 pub struct Projects {
     file: PathBuf,
     home: PathBuf,
@@ -83,6 +88,7 @@ impl Projects {
             root: settings.root,
             claude_config_dir: settings.claude_config_dir,
             ssh_key: settings.ssh_key,
+            context_dir: settings.context_dir,
         };
         let mut entries = self.lock()?;
         entries.push(project.clone());
@@ -101,12 +107,14 @@ impl Projects {
         project.root = settings.root;
         project.claude_config_dir = settings.claude_config_dir;
         project.ssh_key = settings.ssh_key;
+        project.context_dir = settings.context_dir;
         let updated = project.clone();
         self.save(&entries)?;
         Ok(updated)
     }
 
     /// Sessions of a deleted project keep running and keep its environment.
+    /// Its default context folder goes with it; a folder the user chose stays.
     pub fn delete(&self, id: &str) -> Result<(), ProjectsError> {
         let mut entries = self.lock()?;
         let before = entries.len();
@@ -114,7 +122,38 @@ impl Projects {
         if entries.len() == before {
             return Err(ProjectsError::NotFound);
         }
-        self.save(&entries)
+        self.save(&entries)?;
+        match fs::remove_dir_all(self.default_context_dir(id)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        }
+    }
+
+    /// Where the project's rules and plan live.
+    pub fn context_dir(&self, project: &Project) -> PathBuf {
+        project
+            .context_dir
+            .as_ref()
+            .map_or_else(|| self.default_context_dir(&project.id), PathBuf::from)
+    }
+
+    pub fn read_context(&self, id: &str) -> Result<(PathBuf, ContextFiles), ProjectsError> {
+        let project = self.get(id).ok_or(ProjectsError::NotFound)?;
+        let dir = self.context_dir(&project);
+        let files = context::read(&dir)?;
+        Ok((dir, files))
+    }
+
+    pub fn save_context(&self, id: &str, files: &ContextFiles) -> Result<PathBuf, ProjectsError> {
+        let project = self.get(id).ok_or(ProjectsError::NotFound)?;
+        let dir = self.context_dir(&project);
+        context::write(&dir, files)?;
+        Ok(dir)
+    }
+
+    fn default_context_dir(&self, id: &str) -> PathBuf {
+        let data = self.file.parent().unwrap_or(Path::new("."));
+        data.join("contexts").join(id)
     }
 
     fn validate(&self, settings: ProjectSettings) -> Result<ProjectSettings, ProjectsError> {
@@ -134,6 +173,11 @@ impl Projects {
             && !accounts::is_known_ssh_key(&self.home, key)
         {
             return Err(ProjectsError::UnknownSshKey(key.clone()));
+        }
+        if let Some(dir) = &settings.context_dir
+            && !Path::new(dir).is_dir()
+        {
+            return Err(ProjectsError::InvalidContextDir(dir.clone()));
         }
         Ok(ProjectSettings { name, ..settings })
     }
@@ -168,6 +212,7 @@ mod tests {
             root: root.display().to_string(),
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
         }
     }
 
@@ -218,10 +263,64 @@ mod tests {
             projects.create(unknown_key),
             Err(ProjectsError::UnknownSshKey(_))
         ));
+        let missing_context = ProjectSettings {
+            context_dir: Some("/nowhere".into()),
+            ..settings("x", &dir)
+        };
+        assert!(matches!(
+            projects.create(missing_context),
+            Err(ProjectsError::InvalidContextDir(_))
+        ));
         assert!(matches!(
             projects.delete("missing"),
             Err(ProjectsError::NotFound)
         ));
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn context_lives_in_data_until_the_project_is_deleted() {
+        let dir = temp_dir();
+        let projects = Projects::load(dir.join("projects.json"), dir.clone());
+        let project = projects.create(settings("api", &dir)).expect("create");
+        let (context_dir, empty) = projects.read_context(&project.id).expect("read");
+        assert_eq!(context_dir, dir.join("contexts").join(&project.id));
+        assert_eq!(empty, ContextFiles::default());
+
+        let files = ContextFiles {
+            rules: "Use tabs.".into(),
+            plan: "1. Login".into(),
+        };
+        projects.save_context(&project.id, &files).expect("save");
+        assert_eq!(projects.read_context(&project.id).expect("read").1, files);
+
+        projects.delete(&project.id).expect("delete");
+        assert!(!context_dir.exists());
+        assert!(matches!(
+            projects.read_context(&project.id),
+            Err(ProjectsError::NotFound)
+        ));
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn chosen_context_folder_is_kept_on_delete() {
+        let dir = temp_dir();
+        let own = dir.join("notes");
+        fs::create_dir_all(&own).expect("own dir");
+        let projects = Projects::load(dir.join("projects.json"), dir.clone());
+        let project = projects
+            .create(ProjectSettings {
+                context_dir: Some(own.display().to_string()),
+                ..settings("api", &dir)
+            })
+            .expect("create");
+        let saved = projects
+            .save_context(&project.id, &ContextFiles::default())
+            .expect("save");
+        assert_eq!(saved, own);
+        projects.delete(&project.id).expect("delete");
+        assert!(own.join(context::RULES_FILE).exists());
         fs::remove_dir_all(dir).expect("cleanup");
     }
 }

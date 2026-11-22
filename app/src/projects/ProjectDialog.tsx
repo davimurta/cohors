@@ -64,6 +64,7 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
       root,
       claudeConfigDir: account === DEFAULT_OPTION ? null : account,
       sshKey: sshKey === DEFAULT_OPTION ? null : sshKey,
+      contextDir: project?.contextDir ?? null,
     });
   };
 

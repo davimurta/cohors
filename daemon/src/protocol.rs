@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Client token. Debug output is redacted so it can never reach logs.
@@ -74,6 +74,14 @@ pub enum ClientMessage {
     },
     #[serde(rename = "project.delete")]
     ProjectDelete { id: String },
+    #[serde(rename = "project.context.get")]
+    ProjectContextGet { id: String },
+    #[serde(rename = "project.context.save")]
+    ProjectContextSave {
+        id: String,
+        rules: String,
+        plan: String,
+    },
 }
 
 /// Editable part of a project.
@@ -86,6 +94,9 @@ pub struct ProjectSettings {
     pub claude_config_dir: Option<String>,
     /// Private key path for `GIT_SSH_COMMAND`; None keeps the system SSH setup.
     pub ssh_key: Option<String>,
+    /// Folder with the rules and plan files; None keeps them in Cohors data.
+    #[serde(default)]
+    pub context_dir: Option<String>,
 }
 
 /// Also the on-disk format of `projects.json` entries.
@@ -97,6 +108,8 @@ pub struct Project {
     pub root: String,
     pub claude_config_dir: Option<String>,
     pub ssh_key: Option<String>,
+    #[serde(default)]
+    pub context_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -232,6 +245,15 @@ pub enum ServerMessage {
     /// Reply to `project.list`, and sent to every client after a change.
     #[serde(rename = "project.list.result")]
     ProjectListResult { projects: Vec<Project> },
+    /// Reply to `project.context.get` and `project.context.save`. `dir` is
+    /// where the files live, also when the project uses the default folder.
+    #[serde(rename = "project.context.result")]
+    ProjectContextResult {
+        id: String,
+        dir: String,
+        rules: String,
+        plan: String,
+    },
     #[serde(rename = "session.snapshot")]
     SessionSnapshot { id: String, seq: u64, data: String },
     #[serde(rename = "session.output")]

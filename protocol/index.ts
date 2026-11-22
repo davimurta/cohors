@@ -1,6 +1,6 @@
 // Mirror of daemon/src/protocol.rs. Keep both in sync.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type Agent = 'claude' | 'shell';
 
@@ -42,6 +42,8 @@ export interface ProjectSettings {
   claudeConfigDir: string | null;
   /** Private key path (`GIT_SSH_COMMAND`); null keeps the system SSH setup. */
   sshKey: string | null;
+  /** Folder with the rules and plan files; null keeps them in Cohors data. */
+  contextDir: string | null;
 }
 
 export interface Project extends ProjectSettings {
@@ -92,7 +94,9 @@ export type ClientMessage =
   | { type: 'project.list' }
   | { type: 'project.create'; project: ProjectSettings }
   | { type: 'project.update'; id: string; project: ProjectSettings }
-  | { type: 'project.delete'; id: string };
+  | { type: 'project.delete'; id: string }
+  | { type: 'project.context.get'; id: string }
+  | { type: 'project.context.save'; id: string; rules: string; plan: string };
 
 export type ServerMessage =
   | { type: 'ready'; protocolVersion: number; daemonVersion: string; claudeAvailable: boolean }
@@ -104,6 +108,7 @@ export type ServerMessage =
   | { type: 'session.transcript.result'; id: string; data: string; truncated: boolean }
   | { type: 'accounts.list.result'; claudeAccounts: ClaudeAccount[]; sshKeys: SshKey[] }
   | { type: 'project.list.result'; projects: Project[] }
+  | { type: 'project.context.result'; id: string; dir: string; rules: string; plan: string }
   | { type: 'session.snapshot'; id: string; seq: number; data: string }
   | { type: 'session.output'; id: string; seq: number; data: string }
   | { type: 'error'; code: ErrorCode; message: string; ref?: string };

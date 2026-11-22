@@ -155,6 +155,7 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
       return requestFailed(state, message.code, message.ref);
     case 'session.snapshot':
     case 'session.output':
+    case 'project.context.result':
       return state;
   }
 }

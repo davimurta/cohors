@@ -8,6 +8,7 @@ const project = (id: string): Project => ({
   root: `/dev/${id}`,
   claudeConfigDir: null,
   sshKey: null,
+  contextDir: null,
 });
 
 const session = (id: string, projectId: string | null): SessionMeta => ({

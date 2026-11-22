@@ -158,7 +158,14 @@ describe('resume', () => {
 });
 
 describe('projects', () => {
-  const project = { id: 'p', name: 'api', root: '/dev/api', claudeConfigDir: null, sshKey: null };
+  const project = {
+    id: 'p',
+    name: 'api',
+    root: '/dev/api',
+    claudeConfigDir: null,
+    sshKey: null,
+    contextDir: null,
+  };
 
   it('closes the dialog once the save is confirmed', () => {
     const state = applyServerMessage(

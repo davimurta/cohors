@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,6 +16,7 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 
 use crate::accounts;
 use crate::auth::{origin_allowed, token_matches};
+use crate::context::ContextFiles;
 use crate::projects::{Projects, ProjectsError};
 use crate::protocol::SummaryStatus;
 use crate::protocol::{
@@ -308,6 +309,19 @@ async fn handle_message(
         ClientMessage::ProjectDelete { id } => {
             project_changed(state, state.projects.delete(&id), &id)
         }
+        ClientMessage::ProjectContextGet { id } => {
+            Some(state.projects.read_context(&id).map_or_else(
+                |error| request_error(error.code(), &error, &id),
+                |(dir, files)| context_result(id.clone(), &dir, files),
+            ))
+        }
+        ClientMessage::ProjectContextSave { id, rules, plan } => {
+            let files = ContextFiles { rules, plan };
+            Some(match state.projects.save_context(&id, &files) {
+                Ok(dir) => context_result(id, &dir, files),
+                Err(error) => request_error(error.code(), &error, &id),
+            })
+        }
     };
     if let Some(reply) = reply {
         let _ = outgoing.send(reply).await;
@@ -379,6 +393,15 @@ fn create_session(
         .create(request)
         .err()
         .map(|error| request_error(error.code(), &error, REFERENCE))
+}
+
+fn context_result(id: String, dir: &Path, files: ContextFiles) -> ServerMessage {
+    ServerMessage::ProjectContextResult {
+        id,
+        dir: dir.display().to_string(),
+        rules: files.rules,
+        plan: files.plan,
+    }
 }
 
 /// After a project change every client gets the full list.

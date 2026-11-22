@@ -9,7 +9,7 @@ TypeScript types live in `index.ts`; the Rust side is `daemon/src/protocol.rs`.
 The first client message must be `hello` within 5 seconds:
 
 ```json
-{ "type": "hello", "token": "<token>", "protocolVersion": 1 }
+{ "type": "hello", "token": "<token>", "protocolVersion": 2 }
 ```
 
 The daemon answers `ready` with its versions and whether `claude` is in its PATH (`claudeAvailable`), or `error` (`unauthorized`, `unsupported_protocol`) and closes the connection.
@@ -63,8 +63,14 @@ A project groups sessions and gives them a root folder, a Claude account and an 
 | `accounts.list` | Replies `accounts.list.result {claudeAccounts, sshKeys}`: the default Claude account plus every `~/.claude*` folder with a logged-in account (email and organization read from its `.claude.json`), and private keys in `~/.ssh` that have a `.pub` pair. Tokens and key contents are never read |
 | `project.list` | Replies `project.list.result {projects}` |
 | `project.create {project}` / `project.update {id, project}` / `project.delete {id}` | Every client receives the new `project.list.result`. The root must exist, and the account and key must be ones `accounts.list` returns |
+| `project.context.get {id}` | Replies `project.context.result {id, dir, rules, plan}`; missing files read as empty |
+| `project.context.save {id, rules, plan}` | Writes `regras.md` and `plano.md` and replies `project.context.result` to the requester |
 
 `session.create {projectId}` copies the project's account and key into the session. Its processes run with `CLAUDE_CONFIG_DIR` set to the account folder (removed for the default account) and, when a key is set, `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes"`. Shells get the same variables. Resume reuses the values stored in the session, so later project edits do not move a conversation to another account. Deleting a project leaves its sessions untouched.
+
+### Project context
+
+Each project has a context folder with `regras.md` (rules) and `plano.md` (plan). By default it is `contexts/<projectId>` in the user data directory; `contextDir` points it at a folder of the user's choice instead. Deleting a project removes the default folder and leaves a chosen one alone.
 
 ## Terminal state on attach
 
