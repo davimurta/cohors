@@ -48,6 +48,9 @@ interface SessionsActions {
   closeRename: () => void;
   renameSession: (id: string, name: string) => void;
   openTranscript: (id: string) => void;
+  loadConversation: (id: string) => void;
+  /** Runs right away; the search box debounces. */
+  searchHistory: (query: string) => void;
   closeTranscript: () => void;
   deleteSession: (id: string) => void;
   openProjectDialog: (projectId: string | null) => void;
@@ -137,6 +140,18 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
     daemon.send({ type: 'session.transcript', id });
   },
   closeTranscript: () => set({ transcript: null }),
+  loadConversation: (id) => {
+    if (!(id in get().conversations)) daemon.send({ type: 'session.conversation', id });
+  },
+  searchHistory: (query) => {
+    if (query.trim() === '') {
+      set({ historySearch: null });
+      return;
+    }
+    // The previous matches stay on screen until the new ones arrive.
+    set({ historySearch: { query, ids: get().historySearch?.ids ?? null } });
+    daemon.send({ type: 'session.search', query });
+  },
   deleteSession: (id) => daemon.send({ type: 'session.delete', id }),
   openProjectDialog: (projectId) => {
     // Accounts and keys may have changed since the app started.

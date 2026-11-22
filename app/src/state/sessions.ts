@@ -1,10 +1,12 @@
 import type {
   ClaudeAccount,
+  ConversationEntry,
   ErrorCode,
   Project,
   ServerMessage,
   SessionMeta,
   SshKey,
+  TokenUsage,
 } from '@cohors/protocol';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { isLive } from '../session/status.ts';
@@ -17,6 +19,18 @@ export interface TranscriptView {
   /** null while loading. */
   data: string | null;
   truncated: boolean;
+}
+
+/** Claude conversation of a session; both null when Claude kept no log. */
+export interface Conversation {
+  entries: ConversationEntry[] | null;
+  usage: TokenUsage | null;
+}
+
+export interface HistorySearch {
+  query: string;
+  /** Matching finished sessions; null until the first answer arrives. */
+  ids: string[] | null;
 }
 
 export interface ContextEditor {
@@ -42,6 +56,10 @@ export interface SessionsState {
   /** Summary text by session id, loaded when a finished session is opened. */
   summaries: Record<string, string | null>;
   transcript: TranscriptView | null;
+  /** Conversations by session id, loaded on demand. */
+  conversations: Record<string, Conversation>;
+  /** Search in the finished sessions; null when the box is empty. */
+  historySearch: HistorySearch | null;
   /** Session whose notes dialog is open. */
   notesId: string | null;
   /** Session whose rename dialog is open. */
@@ -75,6 +93,8 @@ export const initialSessionsState: SessionsState = {
   sidebarTab: 'active',
   summaries: {},
   transcript: null,
+  conversations: {},
+  historySearch: null,
   notesId: null,
   renameId: null,
   projects: [],
@@ -157,6 +177,18 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
         ...state,
         transcript: { id: message.id, data: message.data, truncated: message.truncated },
       };
+    case 'session.conversation.result':
+      return {
+        ...state,
+        conversations: {
+          ...state.conversations,
+          [message.id]: { entries: message.entries, usage: message.usage },
+        },
+      };
+    case 'session.search.result':
+      // Answers to an older query are dropped.
+      if (state.historySearch?.query !== message.query) return state;
+      return { ...state, historySearch: { query: message.query, ids: message.ids } };
     case 'accounts.list.result':
       return { ...state, claudeAccounts: message.claudeAccounts, sshKeys: message.sshKeys };
     case 'project.list.result': {
@@ -214,10 +246,12 @@ export function applyConnectionStatus(
 function sessionDeleted(state: SessionsState, id: string): SessionsState {
   const sessions = state.sessions.filter((session) => session.id !== id);
   const { [id]: _removed, ...summaries } = state.summaries;
+  const { [id]: _conversation, ...conversations } = state.conversations;
   return {
     ...state,
     sessions,
     summaries,
+    conversations,
     selectedId:
       state.selectedId === id ? firstInTab(sessions, state.sidebarTab) : state.selectedId,
     transcript: state.transcript?.id === id ? null : state.transcript,

@@ -320,3 +320,33 @@ describe('applyConnectionStatus', () => {
     expect(state.creating).toBe(false);
   });
 });
+
+describe('history search and conversations', () => {
+  it('keeps only the answer to the current query', () => {
+    const searching = { ...withSessions([]), historySearch: { query: 'bill', ids: null } };
+    const stale = applyServerMessage(searching, {
+      type: 'session.search.result',
+      query: 'bi',
+      ids: ['x'],
+    });
+    expect(stale.historySearch?.ids).toBeNull();
+    const current = applyServerMessage(searching, {
+      type: 'session.search.result',
+      query: 'bill',
+      ids: ['a'],
+    });
+    expect(current.historySearch).toEqual({ query: 'bill', ids: ['a'] });
+  });
+
+  it('caches conversations and drops them with the session', () => {
+    const loaded = applyServerMessage(withSessions(['a']), {
+      type: 'session.conversation.result',
+      id: 'a',
+      entries: [],
+      usage: null,
+    });
+    expect(loaded.conversations['a']).toEqual({ entries: [], usage: null });
+    const deleted = applyServerMessage(loaded, { type: 'session.deleted', id: 'a' });
+    expect(deleted.conversations).toEqual({});
+  });
+});

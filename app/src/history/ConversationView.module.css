@@ -1,0 +1,83 @@
+.conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.user,
+.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user {
+  padding: 12px 14px;
+  border: 1px solid var(--color-accent-soft-border);
+  border-radius: var(--radius-card);
+  background: var(--color-accent-soft-bg);
+}
+
+.author {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.time {
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+}
+
+.userText {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tools {
+  padding-left: 2px;
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.tool > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool > svg {
+  flex: none;
+}
+
+.empty {
+  font-size: 13.5px;
+  color: var(--color-text-tertiary);
+}

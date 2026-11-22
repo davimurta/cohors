@@ -40,3 +40,39 @@
   background: var(--color-terminal-bg);
   overflow: hidden;
 }
+
+.modes {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-control);
+  background: var(--color-segmented);
+}
+
+.mode {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-tab);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.mode[aria-pressed='true'] {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--shadow-tab);
+}
+
+.conversation {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 24px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  overflow-y: auto;
+}

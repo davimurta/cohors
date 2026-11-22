@@ -82,3 +82,10 @@ export function displayPath(path: string, home: string | null): string {
   }
   return path;
 }
+
+const TOKENS = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 });
+
+/** "950", "12,3 mil", "1,2 mi". */
+export function formatTokens(count: number): string {
+  return TOKENS.format(count);
+}
