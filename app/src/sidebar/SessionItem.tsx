@@ -17,6 +17,7 @@ interface SessionItemProps {
 
 export function SessionItem({ session, selected, home, now, onSelect }: SessionItemProps) {
   const toggleSplit = useAppStore((state) => state.toggleSplit);
+  const openRename = useAppStore((state) => state.openRename);
   const shown = useAppStore(
     (state) => state.panes.length > 1 && state.panes.includes(session.id),
   );
@@ -34,7 +35,9 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
       className={styles.item}
       aria-current={selected}
       data-shown={shown}
+      title="Clique duplo para renomear"
       onClick={onClick}
+      onDoubleClick={() => openRename(session.id)}
     >
       <StatusDot status={session.status} />
       <span className={styles.text}>

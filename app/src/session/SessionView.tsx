@@ -4,6 +4,7 @@ import { Button } from '../components/Button.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
 import { SplitMenu } from '../split/SplitMenu.tsx';
+import { RenameButton } from '../rename/RenameButton.tsx';
 import { useAppStore } from '../state/store.ts';
 import { EndedPanel } from './EndedPanel.tsx';
 import { FinishButton } from './FinishButton.tsx';
@@ -25,6 +26,7 @@ export function SessionView({ session }: { session: SessionMeta }) {
         <div className={styles.heading}>
           <div className={styles.titleRow}>
             <h1 className={styles.title}>{session.name}</h1>
+            <RenameButton session={session} />
             <StatusPill status={session.status} />
           </div>
           {live ? (

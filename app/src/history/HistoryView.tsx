@@ -13,6 +13,7 @@ import {
 } from '../session/format.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
 import { useNow } from '../session/useNow.ts';
+import { RenameButton } from '../rename/RenameButton.tsx';
 import { useAppStore } from '../state/store.ts';
 import { CopyButton } from './CopyButton.tsx';
 import { SummaryText } from './SummaryText.tsx';
@@ -33,6 +34,7 @@ export function HistoryView({ session }: { session: SessionMeta }) {
         <div className={styles.heading}>
           <div className={styles.titleRow}>
             <h1 className={styles.title}>{session.name}</h1>
+            <RenameButton session={session} />
             <StatusPill status={session.status} />
           </div>
           <span className={styles.meta}>

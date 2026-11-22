@@ -4,6 +4,7 @@ import { NewSessionDialog } from '../new-session/NewSessionDialog.tsx';
 import { ContextDialog } from '../projects/ContextDialog.tsx';
 import { ProjectDialog } from '../projects/ProjectDialog.tsx';
 import { NotesDialog } from '../session/NotesDialog.tsx';
+import { RenameDialog } from '../rename/RenameDialog.tsx';
 import { Sidebar } from '../sidebar/Sidebar.tsx';
 import { startDaemonSync, useAppStore } from '../state/store.ts';
 import { startTerminalRouting } from '../terminal/registry.ts';
@@ -38,6 +39,7 @@ export function App() {
       <ProjectDialog />
       <ContextDialog />
       <NotesDialog />
+      <RenameDialog />
     </div>
   );
 }

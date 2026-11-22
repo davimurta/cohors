@@ -44,6 +44,9 @@ interface SessionsActions {
   openNotes: (id: string) => void;
   closeNotes: () => void;
   saveNotes: (id: string, notes: string) => void;
+  openRename: (id: string) => void;
+  closeRename: () => void;
+  renameSession: (id: string, name: string) => void;
   openTranscript: (id: string) => void;
   closeTranscript: () => void;
   deleteSession: (id: string) => void;
@@ -116,6 +119,12 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   skipSummary: (id) => daemon.send({ type: 'session.skipSummary', id }),
   loadSummary: (id) => {
     if (!(id in get().summaries)) daemon.send({ type: 'session.getSummary', id });
+  },
+  openRename: (id) => set({ renameId: id }),
+  closeRename: () => set({ renameId: null }),
+  renameSession: (id, name) => {
+    daemon.send({ type: 'session.rename', id, name });
+    set({ renameId: null });
   },
   openNotes: (id) => set({ notesId: id }),
   closeNotes: () => set({ notesId: null }),

@@ -44,6 +44,8 @@ export interface SessionsState {
   transcript: TranscriptView | null;
   /** Session whose notes dialog is open. */
   notesId: string | null;
+  /** Session whose rename dialog is open. */
+  renameId: string | null;
   projects: Project[];
   claudeAccounts: ClaudeAccount[];
   sshKeys: SshKey[];
@@ -74,6 +76,7 @@ export const initialSessionsState: SessionsState = {
   summaries: {},
   transcript: null,
   notesId: null,
+  renameId: null,
   projects: [],
   claudeAccounts: [],
   sshKeys: [],
@@ -219,6 +222,7 @@ function sessionDeleted(state: SessionsState, id: string): SessionsState {
       state.selectedId === id ? firstInTab(sessions, state.sidebarTab) : state.selectedId,
     transcript: state.transcript?.id === id ? null : state.transcript,
     notesId: state.notesId === id ? null : state.notesId,
+    renameId: state.renameId === id ? null : state.renameId,
   };
 }
 
