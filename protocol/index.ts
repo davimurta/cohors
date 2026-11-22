@@ -30,6 +30,8 @@ export interface SessionMeta {
   projectId: string | null;
   claudeConfigDir: string | null;
   sshKey: string | null;
+  /** Project context folder Claude reads on start and resume. */
+  contextDir: string | null;
   notes: string;
   summaryStatus: SummaryStatus;
 }

@@ -22,6 +22,7 @@ function meta(id: string): SessionMeta {
     projectId: null,
     claudeConfigDir: null,
     sshKey: null,
+    contextDir: null,
     notes: '',
     summaryStatus: 'none',
   };

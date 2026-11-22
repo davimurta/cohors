@@ -137,6 +137,16 @@ impl Projects {
             .map_or_else(|| self.default_context_dir(&project.id), PathBuf::from)
     }
 
+    /// The context folder, created if it is the default one. A folder the
+    /// user chose and later removed is not recreated.
+    pub fn ensure_context_dir(&self, project: &Project) -> io::Result<PathBuf> {
+        let dir = self.context_dir(project);
+        if project.context_dir.is_none() {
+            private_fs::create_dir(&dir)?;
+        }
+        Ok(dir)
+    }
+
     pub fn read_context(&self, id: &str) -> Result<(PathBuf, ContextFiles), ProjectsError> {
         let project = self.get(id).ok_or(ProjectsError::NotFound)?;
         let dir = self.context_dir(&project);

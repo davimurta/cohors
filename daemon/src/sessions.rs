@@ -10,6 +10,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::context;
 use crate::executable;
 use crate::protocol::{
     Agent, ErrorCode, Project, ServerMessage, SessionMeta, SessionStatus, SummaryStatus,
@@ -68,6 +69,8 @@ pub struct CreateRequest {
     pub name: Option<String>,
     /// The session takes the project's Claude account and SSH key.
     pub project: Option<Project>,
+    /// The project's context folder, already created.
+    pub context_dir: Option<String>,
 }
 
 pub struct SessionEntry {
@@ -169,6 +172,7 @@ impl Sessions {
             project_id: project.map(|project| project.id.clone()),
             claude_config_dir: project.and_then(|project| project.claude_config_dir.clone()),
             ssh_key: project.and_then(|project| project.ssh_key.clone()),
+            context_dir: request.context_dir,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
@@ -540,10 +544,9 @@ fn launch_for(
             let program =
                 executable::find_in(path, CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
             let flag = if resume { "--resume" } else { "--session-id" };
-            (
-                Some(program.to_string_lossy().into_owned()),
-                vec![flag.to_owned(), id.to_owned()],
-            )
+            let mut args = vec![flag.to_owned(), id.to_owned()];
+            args.extend(context_args(meta));
+            (Some(program.to_string_lossy().into_owned()), args)
         }
         _ => (None, Vec::new()),
     };
@@ -554,6 +557,18 @@ fn launch_for(
         path: Some(path.to_os_string()),
         env: environment(meta),
     })
+}
+
+/// Gives Claude the project context. Skipped when the folder is gone (a
+/// deleted project) or the daemon cannot name its own binary for the hook.
+fn context_args(meta: &SessionMeta) -> Vec<String> {
+    let Some(dir) = meta.context_dir.as_deref().map(Path::new) else {
+        return Vec::new();
+    };
+    match std::env::current_exe() {
+        Ok(program) if dir.is_dir() => context::claude_args(&program, dir),
+        _ => Vec::new(),
+    }
 }
 
 /// Account and SSH key of the session's project. Without a project the
@@ -571,9 +586,7 @@ fn environment(meta: &SessionMeta) -> Vec<(String, Option<String>)> {
 }
 
 fn ssh_command(key: &str) -> String {
-    // Single quotes keep spaces in the path; embedded quotes are escaped.
-    let quoted = key.replace('\'', "'\\''");
-    format!("ssh -i '{quoted}' -o IdentitiesOnly=yes")
+    format!("ssh -i {} -o IdentitiesOnly=yes", context::shell_quote(key))
 }
 
 /// Uses the given name, or the folder name when it is blank.
@@ -619,6 +632,7 @@ mod tests {
             cwd: std::env::temp_dir().display().to_string(),
             name: Some(name.into()),
             project: None,
+            context_dir: None,
         }
     }
 
@@ -672,6 +686,25 @@ mod tests {
     }
 
     #[test]
+    fn claude_gets_the_context_folder_while_it_exists() {
+        let dir = temp_root();
+        std::fs::create_dir_all(&dir).expect("dir");
+        let with_context = SessionMeta {
+            context_dir: Some(dir.display().to_string()),
+            ..meta("s")
+        };
+        let args = context_args(&with_context);
+        assert_eq!(
+            args[..2],
+            ["--add-dir".to_owned(), dir.display().to_string()]
+        );
+        assert_eq!(args[2], "--settings");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert!(context_args(&with_context).is_empty());
+        assert!(context_args(&meta("s")).is_empty());
+    }
+
+    #[test]
     fn project_environment_sets_account_and_ssh_key() {
         let meta = SessionMeta {
             claude_config_dir: Some("/home/me/.claude-work".into()),
@@ -716,6 +749,7 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }
@@ -749,6 +783,7 @@ mod tests {
             cwd: "/definitely/not/here".into(),
             name: None,
             project: None,
+            context_dir: None,
         });
         assert!(matches!(result, Err(SessionsError::InvalidCwd(_))));
     }

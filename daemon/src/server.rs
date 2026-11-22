@@ -382,11 +382,19 @@ fn create_session(
         },
         None => None,
     };
+    let context_dir = match &project {
+        Some(project) => match state.projects.ensure_context_dir(project) {
+            Ok(dir) => Some(dir.display().to_string()),
+            Err(error) => return Some(request_error(ErrorCode::Internal, &error, REFERENCE)),
+        },
+        None => None,
+    };
     let request = CreateRequest {
         agent,
         cwd,
         name,
         project,
+        context_dir,
     };
     state
         .sessions

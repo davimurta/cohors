@@ -106,6 +106,7 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }

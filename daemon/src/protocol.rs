@@ -178,6 +178,9 @@ pub struct SessionMeta {
     pub project_id: Option<String>,
     pub claude_config_dir: Option<String>,
     pub ssh_key: Option<String>,
+    /// Project context folder that Claude reads on start and resume.
+    #[serde(default)]
+    pub context_dir: Option<String>,
     #[serde(default)]
     pub notes: String,
     #[serde(default)]
@@ -341,6 +344,7 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
@@ -364,6 +368,7 @@ mod tests {
                     "projectId": null,
                     "claudeConfigDir": null,
                     "sshKey": null,
+                    "contextDir": null,
                     "notes": "",
                     "summaryStatus": "none"
                 }
