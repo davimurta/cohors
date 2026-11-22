@@ -23,6 +23,8 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 
 - [ ] A project with another Claude account opens Claude logged into that account.
 - [ ] A project with an SSH key makes `git fetch` in its shells use that key.
+- [ ] Rules and plan saved in "Regras e plano" reach a new Claude session of the project (ask Claude what the rules say), and an edit made between sessions reaches the session after Retomar.
+- [ ] With a context folder of your own, the files are written there and "Mostrar pasta" opens it.
 
 ## Finish and history
 
@@ -39,5 +41,5 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 
 ## Platform notes
 
-- **Windows**: sessions run under ConPTY; check that `claude` and PowerShell start, that resize works, and that "Encerrar tudo" ends child processes. Stopping the daemon from outside is a hard kill there, so sessions come back as Interrompida.
+- **Windows**: the project context hook runs through Claude Code's shell (Git Bash); check that the rules reach a Claude session. Sessions run under ConPTY; check that `claude` and PowerShell start, that resize works, and that "Encerrar tudo" ends child processes. Stopping the daemon from outside is a hard kill there, so sessions come back as Interrompida.
 - **Linux**: check under both X11 and Wayland; the app needs WebKitGTK 4.1.
