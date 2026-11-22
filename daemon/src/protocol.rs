@@ -160,6 +160,16 @@ pub enum SummaryStatus {
     Failed,
 }
 
+/// Why a Claude session waits for the user.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Attention {
+    /// Claude finished its answer (`Stop`).
+    Done,
+    /// Claude asks for a permission or input (`Notification`).
+    Input,
+}
+
 /// Also the on-disk format of `meta.json`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +193,9 @@ pub struct SessionMeta {
     /// Project context folder that Claude reads on start and resume.
     #[serde(default)]
     pub context_dir: Option<String>,
+    /// Set while a live Claude session waits for the user.
+    #[serde(default)]
+    pub attention: Option<Attention>,
     #[serde(default)]
     pub notes: String,
     #[serde(default)]
@@ -347,6 +360,7 @@ mod tests {
             claude_config_dir: None,
             ssh_key: None,
             context_dir: None,
+            attention: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
@@ -371,6 +385,7 @@ mod tests {
                     "claudeConfigDir": null,
                     "sshKey": null,
                     "contextDir": null,
+                    "attention": null,
                     "notes": "",
                     "summaryStatus": "none"
                 }

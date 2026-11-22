@@ -230,7 +230,10 @@ async fn handle_message(
             None
         }
         ClientMessage::SessionInput { id, data } => match state.sessions.get(&id) {
-            Some(entry) => internal_error(entry.session.write_input(&data), id),
+            Some(entry) => {
+                state.sessions.clear_attention(&id);
+                internal_error(entry.session.write_input(&data), id)
+            }
             None => Some(session_not_found(id)),
         },
         ClientMessage::SessionResize { id, cols, rows } => match state.sessions.get(&id) {

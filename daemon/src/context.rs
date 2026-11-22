@@ -2,7 +2,7 @@
 //! of a project reads when it starts, resumes or compacts.
 //!
 //! Claude gets the folder through `--add-dir`, so it can read and update the
-//! files, and a `SessionStart` hook through `--settings` that runs this
+//! files, and a `SessionStart` hook (see [`crate::hooks`]) that runs this
 //! binary with [`PRINT_FLAG`]. The hook reads the files at that moment, so
 //! edits made between sessions reach resumed conversations too.
 
@@ -67,33 +67,6 @@ pub fn print(dir: &Path) {
     }
 }
 
-/// Arguments that give a Claude session the context in `dir`. `program` is
-/// the daemon binary the hook runs.
-pub fn claude_args(program: &Path, dir: &Path) -> Vec<String> {
-    let command = format!(
-        "{} {PRINT_FLAG} {}",
-        shell_quote(&program.display().to_string()),
-        shell_quote(&dir.display().to_string())
-    );
-    let settings = serde_json::json!({
-        "hooks": {
-            "SessionStart": [{ "hooks": [{ "type": "command", "command": command }] }]
-        }
-    });
-    vec![
-        "--add-dir".to_owned(),
-        dir.display().to_string(),
-        "--settings".to_owned(),
-        settings.to_string(),
-    ]
-}
-
-/// Quotes a value for a POSIX shell. Claude Code runs hook commands with a
-/// POSIX shell on every platform (Git Bash on Windows).
-pub fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn read_file(path: &Path) -> io::Result<String> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(text),
@@ -141,20 +114,5 @@ mod tests {
         assert!(text.contains("in /ctx."));
         assert!(text.contains("## Rules (regras.md)\n\nUse tabs.\n"));
         assert!(!text.contains("## Plan"));
-    }
-
-    #[test]
-    fn hook_runs_this_binary_with_the_folder() {
-        let args = claude_args(
-            Path::new("/Apps/Co hors/cohors-daemon"),
-            Path::new("/data/it's"),
-        );
-        assert_eq!(args[..3], ["--add-dir", "/data/it's", "--settings"]);
-        let settings: serde_json::Value = serde_json::from_str(&args[3]).expect("json");
-        let command = &settings["hooks"]["SessionStart"][0]["hooks"][0]["command"];
-        assert_eq!(
-            command,
-            "'/Apps/Co hors/cohors-daemon' --print-context '/data/it'\\''s'"
-        );
     }
 }

@@ -13,6 +13,9 @@ export type SessionStatus = 'running' | 'idle' | 'exited' | 'interrupted' | 'fin
 
 export type SummaryStatus = 'none' | 'pending' | 'done' | 'failed';
 
+/** Why a Claude session waits for the user: it finished an answer, or it asks for input or a permission. */
+export type Attention = 'done' | 'input';
+
 export interface SessionMeta {
   id: string;
   name: string;
@@ -32,6 +35,8 @@ export interface SessionMeta {
   sshKey: string | null;
   /** Project context folder Claude reads on start and resume. */
   contextDir: string | null;
+  /** Set while a live Claude session waits for the user. */
+  attention: Attention | null;
   notes: string;
   summaryStatus: SummaryStatus;
 }

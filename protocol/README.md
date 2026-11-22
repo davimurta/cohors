@@ -75,6 +75,10 @@ Each project has a context folder with `regras.md` (rules) and `plano.md` (plan)
 
 `session.create {projectId}` also stores the folder in the session as `contextDir` (creating the default one). Claude sessions start and resume with `--add-dir <contextDir>`, so Claude can read and edit the files, and `--settings` with a `SessionStart` hook that runs `cohors-daemon --print-context <contextDir>`. The hook prints both files under a short header, so Claude gets the current text on every start, resume and compaction. Blank files print nothing. When the folder no longer exists the flags are left out. Shells ignore the context.
 
+### Waiting for the user
+
+Claude sessions also get hooks that run `cohors-daemon --attention <state>`: `Stop` reports `done`, `Notification` reports `input` and `UserPromptSubmit` reports `clear`. The hook finds its session through `COHORS_SESSION_ID`, set in every session process, and writes the state to `sessions/<id>/attention`. The daemon checks those files every 2 seconds and sets `attention` in the session (`done`, `input` or null), announced with `session.updated`. A session already waiting keeps its first reason. `session.input`, resume, exit and finish clear it. The hook prints nothing and never fails.
+
 ## Terminal state on attach
 
 When the ring buffer drops old output, the modes that output had set (alternate screen, bracketed paste, mouse, cursor visibility, keyboard protocol) are re-emitted at the start of the snapshot. After a snapshot, the client resizes the PTY one row smaller and back, since the kernel only signals a size change, so the agent repaints its screen.

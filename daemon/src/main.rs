@@ -11,11 +11,13 @@ use cohors_daemon::projects::Projects;
 use cohors_daemon::server::{self, DaemonState};
 use cohors_daemon::sessions::Sessions;
 use cohors_daemon::store::SessionStore;
-use cohors_daemon::{context, control, instance, login_path};
+use cohors_daemon::{context, control, hooks, instance, login_path};
 use tokio::net::TcpListener;
 
-const USAGE: &str = "usage: cohors-daemon [--detach | --stop | --print-context <dir>]";
-/// How often sessions are checked for idleness.
+const USAGE: &str =
+    "usage: cohors-daemon [--detach | --stop | --print-context <dir> | --attention <state>]";
+const SESSIONS_DIR: &str = "sessions";
+/// How often sessions are checked for idleness and hook signals.
 const IDLE_CHECK: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
@@ -24,6 +26,15 @@ fn main() -> ExitCode {
         && flag == context::PRINT_FLAG
     {
         context::print(Path::new(dir));
+        return ExitCode::SUCCESS;
+    }
+    if let [flag, state] = args.as_slice()
+        && flag == hooks::ATTENTION_FLAG
+    {
+        hooks::report(
+            daemon_file::data_dir().map(|dir| dir.join(SESSIONS_DIR)),
+            state,
+        );
         return ExitCode::SUCCESS;
     }
     let result = data_dir().and_then(|dir| match args.as_slice() {
@@ -59,7 +70,7 @@ fn run(data_dir: &Path) -> Result<(), Box<dyn Error>> {
 
 async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
     let path = login_path::resolve(std::env::var_os("PATH")).await;
-    let sessions = Sessions::load(SessionStore::new(data_dir.join("sessions")), path);
+    let sessions = Sessions::load(SessionStore::new(data_dir.join(SESSIONS_DIR)), path);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let port = listener.local_addr()?.port();
     let token = generate_token()?;
@@ -79,6 +90,7 @@ async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
         loop {
             ticks.tick().await;
             idle_sessions.refresh_idle(Instant::now());
+            idle_sessions.refresh_attention();
         }
     });
 

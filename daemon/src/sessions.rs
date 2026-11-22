@@ -10,8 +10,8 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::context;
 use crate::executable;
+use crate::hooks::{self, Signal};
 use crate::protocol::{
     Agent, ErrorCode, Project, ServerMessage, SessionMeta, SessionStatus, SummaryStatus,
 };
@@ -101,6 +101,9 @@ impl Sessions {
         let mut entries = HashMap::new();
         for mut meta in store.load_all() {
             let mut changed = false;
+            if meta.attention.take().is_some() {
+                changed = true;
+            }
             if meta.status.is_live() {
                 let last_activity = store.transcript_modified(&meta.id);
                 mark_interrupted(&mut meta, last_activity);
@@ -176,6 +179,7 @@ impl Sessions {
             claude_config_dir: project.and_then(|project| project.claude_config_dir.clone()),
             ssh_key: project.and_then(|project| project.ssh_key.clone()),
             context_dir: request.context_dir,
+            attention: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
@@ -220,6 +224,7 @@ impl Sessions {
         meta.exit_code = None;
         meta.ended_at = None;
         meta.idle_since = None;
+        meta.attention = None;
         self.store.save(&meta)?;
         let updated = meta.clone();
         drop(meta);
@@ -265,6 +270,7 @@ impl Sessions {
             let summarize = with_summary && can_summarize(meta);
             meta.status = SessionStatus::Finished;
             meta.idle_since = None;
+            meta.attention = None;
             // Exited and interrupted sessions keep the time they actually stopped.
             if meta.ended_at.is_none() {
                 meta.ended_at = Some(now()?);
@@ -443,6 +449,63 @@ impl Sessions {
         self.announce(ServerMessage::ProjectListResult { projects });
     }
 
+    /// Applies the signals the Claude hooks left. A session already waiting
+    /// keeps its first reason: a `Notification` after `Stop` is Claude Code
+    /// reminding that the user has not answered yet.
+    pub fn refresh_attention(&self) {
+        let entries: Vec<Arc<SessionEntry>> = match self.entries.lock() {
+            Ok(entries) => entries.values().cloned().collect(),
+            Err(_) => return,
+        };
+        for entry in entries {
+            let Ok(mut meta) = entry.meta.lock() else {
+                continue;
+            };
+            if meta.agent != Agent::Claude {
+                continue;
+            }
+            let signal = match self.store.take_signal(&meta.id) {
+                Ok(Some(signal)) => signal,
+                Ok(None) => continue,
+                Err(error) => {
+                    eprintln!("failed to read hook signal {}: {error}", meta.id);
+                    continue;
+                }
+            };
+            let next = match signal {
+                Signal::Waiting(_) if !meta.status.is_live() => continue,
+                Signal::Waiting(_) if meta.attention.is_some() => continue,
+                Signal::Waiting(reason) => Some(reason),
+                Signal::Clear if meta.attention.is_none() => continue,
+                Signal::Clear => None,
+            };
+            meta.attention = next;
+            self.save_and_announce(meta);
+        }
+    }
+
+    /// The user typed in the session: it no longer waits.
+    pub fn clear_attention(&self, id: &str) {
+        let Some(entry) = self.get(id) else {
+            return;
+        };
+        let Ok(mut meta) = entry.meta.lock() else {
+            return;
+        };
+        if meta.attention.take().is_some() {
+            self.save_and_announce(meta);
+        }
+    }
+
+    fn save_and_announce(&self, meta: MutexGuard<'_, SessionMeta>) {
+        if let Err(error) = self.store.save(&meta) {
+            eprintln!("failed to save session {}: {error}", meta.id);
+        }
+        let updated = meta.clone();
+        drop(meta);
+        self.announce(ServerMessage::SessionUpdated { session: updated });
+    }
+
     /// Moves live sessions between running and idle based on their last
     /// output. Called periodically; announces only actual changes.
     pub fn refresh_idle(&self, now: Instant) {
@@ -499,6 +562,7 @@ impl Sessions {
         }
         meta.status = SessionStatus::Exited;
         meta.idle_since = None;
+        meta.attention = None;
         meta.exit_code = exit_code;
         meta.ended_at = now().ok();
         if let Err(error) = self.store.save(&meta) {
@@ -560,7 +624,7 @@ fn launch_for(
                 executable::find_in(path, CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
             let flag = if resume { "--resume" } else { "--session-id" };
             let mut args = vec![flag.to_owned(), id.to_owned()];
-            args.extend(context_args(meta));
+            args.extend(hook_args(meta));
             (Some(program.to_string_lossy().into_owned()), args)
         }
         _ => (None, Vec::new()),
@@ -574,26 +638,33 @@ fn launch_for(
     })
 }
 
-/// Gives Claude the project context. Skipped when the folder is gone (a
-/// deleted project) or the daemon cannot name its own binary for the hook.
-fn context_args(meta: &SessionMeta) -> Vec<String> {
-    let Some(dir) = meta.context_dir.as_deref().map(Path::new) else {
+/// Hooks for a Claude session, with its project context while the folder
+/// exists (a deleted project loses it). None when the daemon cannot name its
+/// own binary for the hooks.
+fn hook_args(meta: &SessionMeta) -> Vec<String> {
+    let Ok(program) = std::env::current_exe() else {
         return Vec::new();
     };
-    match std::env::current_exe() {
-        Ok(program) if dir.is_dir() => context::claude_args(&program, dir),
-        _ => Vec::new(),
-    }
+    let context_dir = meta
+        .context_dir
+        .as_deref()
+        .map(Path::new)
+        .filter(|dir| dir.is_dir());
+    hooks::claude_args(&program, context_dir)
 }
 
 /// Account and SSH key of the session's project. Without a project the
 /// default Claude account is used, even if the daemon inherited another.
 /// Shells get them too, so `claude` and `git` run inside them match.
 fn environment(meta: &SessionMeta) -> Vec<(String, Option<String>)> {
-    let mut env = vec![(
-        "CLAUDE_CONFIG_DIR".to_owned(),
-        meta.claude_config_dir.clone(),
-    )];
+    let mut env = vec![
+        (
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            meta.claude_config_dir.clone(),
+        ),
+        // Lets the hooks find their session.
+        (hooks::SESSION_ENV.to_owned(), Some(meta.id.clone())),
+    ];
     if let Some(key) = &meta.ssh_key {
         env.push(("GIT_SSH_COMMAND".to_owned(), Some(ssh_command(key))));
     }
@@ -601,7 +672,7 @@ fn environment(meta: &SessionMeta) -> Vec<(String, Option<String>)> {
 }
 
 fn ssh_command(key: &str) -> String {
-    format!("ssh -i {} -o IdentitiesOnly=yes", context::shell_quote(key))
+    format!("ssh -i {} -o IdentitiesOnly=yes", hooks::shell_quote(key))
 }
 
 /// Uses the given name, or the folder name when it is blank.
@@ -626,6 +697,7 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::Attention;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
 
@@ -697,7 +769,7 @@ mod tests {
         let Ok(launch) = launch_for(&path, &meta, Path::new("/tmp"), true) else {
             return; // claude is not installed on this machine
         };
-        assert_eq!(launch.args, ["--resume", "abc"]);
+        assert_eq!(launch.args[..3], ["--resume", "abc", "--settings"]);
     }
 
     #[test]
@@ -708,15 +780,15 @@ mod tests {
             context_dir: Some(dir.display().to_string()),
             ..meta("s")
         };
-        let args = context_args(&with_context);
+        let args = hook_args(&with_context);
         assert_eq!(
             args[..2],
             ["--add-dir".to_owned(), dir.display().to_string()]
         );
         assert_eq!(args[2], "--settings");
         std::fs::remove_dir_all(&dir).expect("cleanup");
-        assert!(context_args(&with_context).is_empty());
-        assert!(context_args(&meta("s")).is_empty());
+        assert_eq!(hook_args(&with_context)[0], "--settings");
+        assert_eq!(hook_args(&meta("s"))[0], "--settings");
     }
 
     #[test]
@@ -733,6 +805,7 @@ mod tests {
                     "CLAUDE_CONFIG_DIR".to_owned(),
                     Some("/home/me/.claude-work".to_owned())
                 ),
+                (hooks::SESSION_ENV.to_owned(), Some("s".to_owned())),
                 (
                     "GIT_SSH_COMMAND".to_owned(),
                     Some("ssh -i '/home/me/.ssh/it'\\''s key' -o IdentitiesOnly=yes".to_owned())
@@ -745,7 +818,10 @@ mod tests {
     fn default_account_clears_inherited_config_dir() {
         assert_eq!(
             environment(&meta("s")),
-            [("CLAUDE_CONFIG_DIR".to_owned(), None)]
+            [
+                ("CLAUDE_CONFIG_DIR".to_owned(), None),
+                (hooks::SESSION_ENV.to_owned(), Some("s".to_owned())),
+            ]
         );
     }
 
@@ -765,6 +841,7 @@ mod tests {
             claude_config_dir: None,
             ssh_key: None,
             context_dir: None,
+            attention: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }
@@ -808,6 +885,72 @@ mod tests {
         ));
         let reloaded = SessionStore::new(root.clone()).load_all();
         assert_eq!(reloaded[0].name, "api login");
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A live Claude session whose `claude` is a script that waits, so the
+    /// test needs no real Claude Code.
+    #[cfg(unix)]
+    fn fake_claude_session(root: &Path) -> (Arc<Sessions>, SessionMeta) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let script = bin.join(CLAUDE_COMMAND);
+        std::fs::write(&script, "#!/bin/sh\nexec /bin/sleep 30\n").expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let sessions = Sessions::load(
+            SessionStore::new(root.join("sessions")),
+            bin.into_os_string(),
+        );
+        let meta = sessions
+            .create(CreateRequest {
+                agent: Agent::Claude,
+                cwd: std::env::temp_dir().display().to_string(),
+                name: None,
+                project: None,
+                context_dir: None,
+            })
+            .expect("create");
+        (sessions, meta)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signals_mark_and_clear_waiting() {
+        let root = temp_root();
+        let (sessions, meta) = fake_claude_session(&root);
+        let sessions_dir = root.join("sessions");
+        let attention = |sessions: &Sessions| {
+            sessions
+                .list()
+                .into_iter()
+                .find(|session| session.id == meta.id)
+                .and_then(|session| session.attention)
+        };
+
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Waiting(Attention::Done))
+            .expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), Some(Attention::Done));
+
+        // A reminder keeps the first reason.
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Waiting(Attention::Input))
+            .expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), Some(Attention::Done));
+
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Clear).expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), None);
+
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Waiting(Attention::Input))
+            .expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), Some(Attention::Input));
+        sessions.clear_attention(&meta.id);
+        assert_eq!(attention(&sessions), None);
+
+        sessions.shutdown();
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 
