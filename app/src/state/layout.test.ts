@@ -19,6 +19,7 @@ const session = (id: string, status: SessionStatus): SessionMeta => ({
   claudeConfigDir: null,
   sshKey: null,
   contextDir: null,
+  attention: null,
   notes: '',
   summaryStatus: 'none',
 });

@@ -26,6 +26,7 @@ const session = (id: string, projectId: string | null): SessionMeta => ({
   claudeConfigDir: null,
   sshKey: null,
   contextDir: null,
+  attention: null,
   notes: '',
   summaryStatus: 'none',
 });

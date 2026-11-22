@@ -4,6 +4,7 @@ import { StatusDot } from '../components/StatusDot.tsx';
 import { AGENT_LABEL, displayPath, formatDuration, formatSpan } from '../session/format.ts';
 import { isMac } from '../platform.ts';
 import { STATUS_LABEL, isLive } from '../session/status.ts';
+import { ATTENTION_LABEL } from '../app/attention.ts';
 import { useAppStore } from '../state/store.ts';
 import styles from './SessionItem.module.css';
 
@@ -49,9 +50,13 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
             : ''}
         </span>
       </span>
-      <span className={`${styles.status} ${styles[session.status]}`}>
-        {statusText(session, now)}
-      </span>
+      {session.attention === null ? (
+        <span className={`${styles.status} ${styles[session.status]}`}>
+          {statusText(session, now)}
+        </span>
+      ) : (
+        <span className={styles.attention}>{ATTENTION_LABEL}</span>
+      )}
     </button>
   );
 }

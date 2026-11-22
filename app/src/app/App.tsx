@@ -10,6 +10,7 @@ import { startDaemonSync, useAppStore } from '../state/store.ts';
 import { startTerminalRouting } from '../terminal/registry.ts';
 import styles from './App.module.css';
 import { MainView } from './MainView.tsx';
+import { useAttentionNotifications } from './useAttentionNotifications.ts';
 import { useNewSessionShortcut } from './useNewSessionShortcut.ts';
 
 export function App() {
@@ -17,6 +18,7 @@ export function App() {
   const daemonDown = connection === 'unavailable' || connection === 'incompatible';
 
   useNewSessionShortcut();
+  useAttentionNotifications();
 
   useEffect(() => {
     const stopRouting = startTerminalRouting();
