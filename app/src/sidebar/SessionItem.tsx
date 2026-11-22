@@ -36,7 +36,6 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
       className={styles.item}
       aria-current={selected}
       data-shown={shown}
-      title="Clique duplo para renomear"
       onClick={onClick}
       onDoubleClick={() => openRename(session.id)}
     >

@@ -88,5 +88,8 @@ function describe(view: WorktreeView | undefined, worktree: Worktree): string {
       ? 'nenhum commit novo'
       : `${status.commits} ${status.commits === 1 ? 'commit novo' : 'commits novos'} na branch`,
   ];
-  return `${parts.join(', ')}.`;
+  const sentence = `${parts.join(', ')}.`;
+  return status.changes === 0
+    ? sentence
+    : `${sentence} Faça commit ou descarte as mudanças para poder remover.`;
 }
