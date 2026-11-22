@@ -14,7 +14,8 @@ const ROTATE_AT_BYTES: u64 = 20 * 1024 * 1024;
 
 pub struct Transcript {
     dir: PathBuf,
-    file: File,
+    /// None only for the moment of a rotation.
+    file: Option<File>,
     size: u64,
     rotate_at: u64,
 }
@@ -30,7 +31,7 @@ impl Transcript {
         let size = file.metadata()?.len();
         Ok(Self {
             dir: dir.to_path_buf(),
-            file,
+            file: Some(file),
             size,
             rotate_at,
         })
@@ -40,14 +41,20 @@ impl Transcript {
         if self.size > 0 && self.size + bytes.len() as u64 > self.rotate_at {
             self.rotate()?;
         }
-        self.file.write_all(bytes)?;
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("transcript is closed"))?;
+        file.write_all(bytes)?;
         self.size += bytes.len() as u64;
         Ok(())
     }
 
     fn rotate(&mut self) -> io::Result<()> {
+        // Windows cannot rename a file that is still open.
+        self.file = None;
         fs::rename(self.dir.join(FILE_NAME), self.dir.join(PREVIOUS_FILE_NAME))?;
-        self.file = private_fs::open_append(&self.dir.join(FILE_NAME))?;
+        self.file = Some(private_fs::open_append(&self.dir.join(FILE_NAME))?);
         self.size = 0;
         Ok(())
     }

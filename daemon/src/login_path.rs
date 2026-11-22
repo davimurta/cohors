@@ -4,7 +4,9 @@
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
+#[cfg(unix)]
 const START: &str = "__COHORS_PATH_START__";
+#[cfg(unix)]
 const END: &str = "__COHORS_PATH_END__";
 
 /// The login shell PATH followed by any entries of `current` it lacks.
@@ -45,6 +47,7 @@ async fn login_shell_path() -> Option<String> {
     None
 }
 
+#[cfg(unix)]
 fn between_markers(output: &str) -> Option<String> {
     let start = output.find(START)? + START.len();
     let length = output[start..].find(END)?;

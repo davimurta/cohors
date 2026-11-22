@@ -36,14 +36,18 @@ pub fn open_append(path: &Path) -> io::Result<File> {
     options().append(true).create(true).open(path)
 }
 
+#[cfg(unix)]
 fn options() -> OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
     let mut options = OpenOptions::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    options.mode(0o600);
     options
+}
+
+/// Windows profile folders are already private to the user.
+#[cfg(not(unix))]
+fn options() -> OpenOptions {
+    OpenOptions::new()
 }
 
 #[cfg(all(test, unix))]

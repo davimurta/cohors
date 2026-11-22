@@ -197,6 +197,12 @@ impl Session {
         lock(&self.output).ok().map(|output| output.last_output)
     }
 
+    pub fn close_transcript(&self) {
+        if let Ok(mut output) = lock(&self.output) {
+            output.transcript = None;
+        }
+    }
+
     pub fn is_alive(&self) -> bool {
         lock(&self.process).is_ok_and(|process| {
             process

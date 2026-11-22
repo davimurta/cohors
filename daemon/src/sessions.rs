@@ -395,6 +395,8 @@ impl Sessions {
         }
         drop(meta);
         lock(&self.entries)?.remove(id);
+        // Windows cannot delete a folder while a file in it is open.
+        entry.session.close_transcript();
         self.store.remove(id)?;
         self.announce(ServerMessage::SessionDeleted { id: id.to_owned() });
         Ok(())
@@ -609,6 +611,7 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
     fn shell_request(name: &str) -> CreateRequest {
         CreateRequest {
             agent: Agent::Shell,
@@ -628,6 +631,7 @@ mod tests {
             .status
     }
 
+    #[cfg(unix)]
     fn wait_for_status(sessions: &Sessions, id: &str, status: SessionStatus) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
