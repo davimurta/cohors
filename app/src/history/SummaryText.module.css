@@ -1,0 +1,36 @@
+.summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.heading {
+  margin: 12px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.heading:first-child {
+  margin-top: 0;
+}
+
+.list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.paragraph {
+  margin: 0;
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}

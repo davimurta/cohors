@@ -1,0 +1,69 @@
+.list {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 -4px;
+  padding: 0 4px;
+  overflow-y: auto;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 4px 0 12px;
+}
+
+.groupName {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-tab);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: var(--color-segmented);
+  color: var(--color-text);
+}
+
+.emptyGroup {
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.empty {
+  margin: 8px 4px 0;
+  font-size: 12.5px;
+  color: var(--color-text-tertiary);
+}
+
+.newProject {
+  align-self: flex-start;
+}

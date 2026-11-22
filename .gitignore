@@ -1,0 +1,24 @@
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tauri
+app/src-tauri/gen/
+
+# Environment and local data
+.env
+.env.*
+daemon.json
+*.log
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+
+# Tauri sidecar, built from daemon/
+app/src-tauri/binaries/

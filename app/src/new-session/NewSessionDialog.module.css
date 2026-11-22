@@ -1,0 +1,75 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  border: 1.5px solid var(--color-border-subtle);
+  border-radius: var(--radius-item);
+  background: var(--color-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft-bg);
+}
+
+.agent:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agentTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.check {
+  color: var(--color-accent);
+}
+
+.agentDescription {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-secondary);
+}
+
+.optional {
+  font-weight: 400;
+  color: var(--color-text-tertiary);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.footer > button {
+  padding: 0 16px;
+}

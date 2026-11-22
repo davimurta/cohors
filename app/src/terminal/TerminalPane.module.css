@@ -1,0 +1,12 @@
+.pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 20px 22px;
+  border-radius: var(--radius-card);
+  background: var(--color-terminal-bg);
+  overflow: hidden;
+}
+
+.pane :global(.xterm-viewport) {
+  scrollbar-color: var(--color-terminal-divider) transparent;
+}

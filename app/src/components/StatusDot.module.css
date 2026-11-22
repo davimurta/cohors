@@ -1,0 +1,28 @@
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.small {
+  width: 6px;
+  height: 6px;
+}
+
+.running {
+  background: var(--color-accent);
+}
+
+.idle {
+  border: 1.5px solid var(--color-idle-ring);
+}
+
+.exited,
+.finished {
+  background: var(--color-exited-dot);
+}
+
+.interrupted {
+  background: var(--color-interrupted-dot);
+}
