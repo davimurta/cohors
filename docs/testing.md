@@ -32,6 +32,12 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Rules and plan saved in "Regras e plano" reach a new Claude session of the project (ask Claude what the rules say), and an edit made between sessions reaches the session after Retomar.
 - [ ] With a context folder of your own, the files are written there and "Mostrar pasta" opens it.
 
+## Worktrees
+
+- [ ] "Isolar em worktree" on a git repository starts the session in a new folder on a `cohors/...` branch, shown in the header; a folder outside git shows an error.
+- [ ] After finishing, the Worktree card blocks removal while there are uncommitted changes, removes a clean worktree with its branch when it has no new commits, and keeps the branch when it has.
+- [ ] Windows: paths with spaces and the removal work (git for Windows in PATH).
+
 ## Finish and history
 
 - [ ] Finalizar on a Claude session shows the progress screen and then the summary.
