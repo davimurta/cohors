@@ -488,3 +488,38 @@ mod tests {
         assert_eq!(chunk.seq, attachment.snapshot.seq + 1);
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn conpty_runs_a_command_and_reports_its_exit() {
+        let session = Session::new(None);
+        let (sender, receiver) = mpsc::channel();
+        let launch = Launch {
+            program: Some("cmd.exe".into()),
+            args: vec!["/C".into(), "echo cohors-win && exit 3".into()],
+            cwd: std::env::temp_dir(),
+            path: None,
+            env: Vec::new(),
+        };
+        session
+            .start(&launch, move |code| {
+                let _ = sender.send(code);
+            })
+            .expect("start");
+        let code = receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("exit reported");
+        assert_eq!(code, Some(3));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut output = String::new();
+        while Instant::now() < deadline && !output.contains("cohors-win") {
+            output = session.attach().expect("attach").snapshot.data;
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(output.contains("cohors-win"), "output was {output:?}");
+    }
+}
