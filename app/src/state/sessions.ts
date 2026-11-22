@@ -10,7 +10,8 @@ import type {
 } from '@cohors/protocol';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { isLive } from '../session/status.ts';
-import { pruneLayout } from './layout.ts';
+import { EVEN_SPLIT, pruneLayout, type SplitSizes } from './layout.ts';
+import type { SavedLayout } from './persist.ts';
 
 export type SidebarTab = 'active' | 'finished';
 
@@ -52,6 +53,9 @@ export interface SessionsState {
   selectedId: string | null;
   /** Sessions shown together in the main area, in order. */
   panes: string[];
+  splitSizes: SplitSizes;
+  /** Layout saved by the last run, applied once the session list arrives. */
+  restoredLayout: SavedLayout | null;
   sidebarTab: SidebarTab;
   /** Summary text by session id, loaded when a finished session is opened. */
   summaries: Record<string, string | null>;
@@ -90,6 +94,8 @@ export const initialSessionsState: SessionsState = {
   sessions: [],
   selectedId: null,
   panes: [],
+  splitSizes: EVEN_SPLIT,
+  restoredLayout: null,
   sidebarTab: 'active',
   summaries: {},
   transcript: null,
@@ -157,12 +163,27 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
   switch (message.type) {
     case 'ready':
       return { ...state, claudeAvailable: message.claudeAvailable };
-    case 'session.list.result':
+    case 'session.list.result': {
+      const restored = state.restoredLayout;
+      if (restored === null) {
+        return {
+          ...state,
+          sessions: message.sessions,
+          selectedId: keepSelection(state.selectedId, message.sessions),
+        };
+      }
+      // Sessions that ended meanwhile leave the split in syncLayout.
+      const selectedId = keepSelection(restored.selectedId, message.sessions);
+      const selected = message.sessions.find((session) => session.id === selectedId);
       return {
         ...state,
         sessions: message.sessions,
-        selectedId: keepSelection(state.selectedId, message.sessions),
+        selectedId,
+        panes: selectedId === restored.selectedId ? restored.panes : [],
+        sidebarTab: selected === undefined ? restored.sidebarTab : tabOf(selected),
+        restoredLayout: null,
       };
+    }
     case 'session.created':
       return sessionCreated(state, message.session);
     case 'session.updated':
@@ -258,6 +279,10 @@ function sessionDeleted(state: SessionsState, id: string): SessionsState {
     notesId: state.notesId === id ? null : state.notesId,
     renameId: state.renameId === id ? null : state.renameId,
   };
+}
+
+function tabOf(session: SessionMeta): SidebarTab {
+  return session.status === 'finished' ? 'finished' : 'active';
 }
 
 export function inTab(session: SessionMeta, tab: SidebarTab): boolean {

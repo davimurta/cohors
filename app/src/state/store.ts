@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import type { Agent, ProjectSettings } from '@cohors/protocol';
 import { DaemonClient } from '../daemon/client.ts';
-import { closePane, selectSession, toggleSplit } from './layout.ts';
+import {
+  closePane,
+  movePane,
+  selectSession,
+  toggleSplit,
+  type SplitSizes,
+} from './layout.ts';
+import { loadLayout, saveLayout } from './persist.ts';
 import {
   applyConnectionStatus,
   applyServerMessage,
@@ -28,6 +35,9 @@ interface SessionsActions {
   /** Shows a live session next to the current ones, or takes it out. */
   toggleSplit: (id: string) => void;
   closePane: (id: string) => void;
+  /** Moves a pane of the split to another position. */
+  movePane: (id: string, index: number) => void;
+  setSplitSizes: (sizes: SplitSizes) => void;
   openNewSession: (projectId?: string) => void;
   closeNewSession: () => void;
   createSession: (request: CreateSessionRequest) => void;
@@ -62,8 +72,12 @@ interface SessionsActions {
   saveContext: (rules: string, plan: string) => void;
 }
 
+const savedLayout = loadLayout();
+
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
   ...initialSessionsState,
+  restoredLayout: savedLayout,
+  splitSizes: savedLayout?.splitSizes ?? initialSessionsState.splitSizes,
   select: (id) =>
     set((state) => {
       const session = state.sessions.find((candidate) => candidate.id === id);
@@ -73,6 +87,8 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
     }),
   toggleSplit: (id) => set((state) => ({ ...toggleSplit(state, id), transcript: null })),
   closePane: (id) => set((state) => closePane(state, id)),
+  movePane: (id, index) => set((state) => movePane(state, id, index)),
+  setSplitSizes: (splitSizes) => set({ splitSizes }),
   openNewSession: (projectId) =>
     set({ newSessionOpen: true, newSessionProjectId: projectId ?? null, createError: null }),
   closeNewSession: () => set({ newSessionOpen: false, creating: false, createError: null }),
@@ -205,3 +221,20 @@ export function startDaemonSync(): () => void {
     daemon.stop();
   };
 }
+
+// Remembers the view for the next start, once the saved one was applied.
+useAppStore.subscribe((state, previous) => {
+  if (state.restoredLayout !== null) return;
+  const changed =
+    state.panes !== previous.panes ||
+    state.selectedId !== previous.selectedId ||
+    state.sidebarTab !== previous.sidebarTab ||
+    state.splitSizes !== previous.splitSizes;
+  if (!changed) return;
+  saveLayout({
+    panes: state.panes,
+    selectedId: state.selectedId,
+    sidebarTab: state.sidebarTab,
+    splitSizes: state.splitSizes,
+  });
+});

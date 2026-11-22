@@ -350,3 +350,31 @@ describe('history search and conversations', () => {
     expect(deleted.conversations).toEqual({});
   });
 });
+
+describe('restored layout', () => {
+  const restored = {
+    panes: ['a', 'b', 'gone'],
+    selectedId: 'b',
+    sidebarTab: 'active' as const,
+    splitSizes: { column: 0.6, row: 0.5 },
+  };
+
+  it('brings back the split without sessions that are gone', () => {
+    const state = applyServerMessage(
+      { ...initialSessionsState, restoredLayout: restored },
+      { type: 'session.list.result', sessions: [meta('a'), meta('b')] },
+    );
+    expect(state.panes).toEqual(['a', 'b']);
+    expect(state.selectedId).toBe('b');
+    expect(state.restoredLayout).toBeNull();
+  });
+
+  it('falls back to the first session when the focused one is gone', () => {
+    const state = applyServerMessage(
+      { ...initialSessionsState, restoredLayout: { ...restored, selectedId: 'gone' } },
+      { type: 'session.list.result', sessions: [meta('a'), meta('b')] },
+    );
+    expect(state.selectedId).toBe('a');
+    expect(state.panes).toEqual(['a']);
+  });
+});
