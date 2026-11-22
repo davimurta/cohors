@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileText, RotateCcw, Trash2 } from 'lucide-react';
+import { FileText, RotateCcw, Terminal, Trash2 } from 'lucide-react';
 import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { ConfirmDialog } from '../components/ConfirmDialog.tsx';
@@ -42,7 +42,7 @@ export function HistoryView({ session }: { session: SessionMeta }) {
         </div>
         <div className={styles.actions}>
           <Button
-            icon={<FileText size={16} aria-hidden="true" />}
+            icon={<Terminal size={16} aria-hidden="true" />}
             onClick={() => openTranscript(session.id)}
           >
             Ver transcript

@@ -4,6 +4,8 @@ import type { ServerMessage } from '@cohors/protocol';
 import { daemon } from '../state/store.ts';
 
 const FONT_SIZE = 13;
+/** The terminal needs Tab, so F6 is the way out of it for keyboard users. */
+export const LEAVE_TERMINAL_KEY = 'F6';
 // Taller lines leave gaps between the box drawing characters of TUIs.
 const LINE_HEIGHT = 1.2;
 
@@ -23,6 +25,11 @@ class SessionTerminal {
     this.terminal = new Terminal(terminalOptions());
     this.terminal.loadAddon(this.fit);
     this.terminal.onData((data) => daemon.send({ type: 'session.input', id, data }));
+    this.terminal.attachCustomKeyEventHandler((event) => {
+      if (event.key !== LEAVE_TERMINAL_KEY) return true;
+      if (event.type === 'keydown') leaveTerminal();
+      return false;
+    });
     this.terminal.onResize(() => this.sendResize());
   }
 
@@ -114,6 +121,14 @@ export function startTerminalRouting(): () => void {
       terminals.get(message.id)?.receive(message);
     }
   });
+}
+
+/** Moves focus to the selected session in the sidebar. */
+function leaveTerminal(): void {
+  const target =
+    document.querySelector<HTMLElement>('nav [aria-current="true"]') ??
+    document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  target?.focus();
 }
 
 function disposeTerminal(id: string): void {

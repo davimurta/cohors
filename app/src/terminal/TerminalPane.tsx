@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
-import { terminalFor } from './registry.ts';
+import { LEAVE_TERMINAL_KEY, terminalFor } from './registry.ts';
 import styles from './TerminalPane.module.css';
 
 interface TerminalPaneProps {
@@ -39,5 +39,12 @@ export function TerminalPane({ sessionId, label, focus = true }: TerminalPanePro
     };
   }, [sessionId]);
 
-  return <section ref={containerRef} className={styles.pane} aria-label={label} />;
+  return (
+    <section
+      ref={containerRef}
+      className={styles.pane}
+      aria-label={label}
+      aria-description={`Pressione ${LEAVE_TERMINAL_KEY} para sair do terminal.`}
+    />
+  );
 }
