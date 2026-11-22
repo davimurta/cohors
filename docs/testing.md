@@ -18,6 +18,8 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Restarting the computer: sessions come back as Interrompida and a Claude session resumes its conversation.
 - [ ] A quiet session turns Ociosa after about 10 seconds and back to Rodando on output.
 - [ ] Cmd+click (Ctrl+click) shows up to four terminals side by side; typing goes to the focused one.
+- [ ] In a split, dragging a divider resizes columns and rows (double click or Enter evens them out); dragging a pane by its grip onto another swaps their places, and the grip's arrow keys do the same.
+- [ ] Reopening the app brings back the split, its sizes and the focused session; sessions that ended meanwhile are left out.
 - [ ] Cmd+1 to Cmd+9 (Ctrl elsewhere) open the active sessions in sidebar order, also from a focused terminal.
 - [ ] Cmd+W (Ctrl+Shift+W elsewhere) closes the focused pane of a split and does nothing with a single pane; Shift+Cmd+W closes the window on macOS. Copy and paste still work in dialogs and terminals.
 - [ ] Renaming from the pencil next to the title, or a double click in the sidebar, updates every open window.
