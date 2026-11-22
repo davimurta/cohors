@@ -12,7 +12,7 @@ const LOCK_FILE: &str = "daemon.lock";
 /// Takes the lock, or returns None when another daemon holds it.
 pub fn acquire(data_dir: &Path) -> io::Result<Option<File>> {
     private_fs::create_dir(data_dir)?;
-    let file = private_fs::open_append(&data_dir.join(LOCK_FILE))?;
+    let file = private_fs::open_read_write(&data_dir.join(LOCK_FILE))?;
     match file.try_lock() {
         Ok(()) => Ok(Some(file)),
         Err(TryLockError::WouldBlock) => Ok(None),

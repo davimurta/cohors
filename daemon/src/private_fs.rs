@@ -36,6 +36,16 @@ pub fn open_append(path: &Path) -> io::Result<File> {
     options().append(true).create(true).open(path)
 }
 
+/// Read and write access, which Windows requires to lock a file.
+pub fn open_read_write(path: &Path) -> io::Result<File> {
+    options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+}
+
 #[cfg(unix)]
 fn options() -> OpenOptions {
     use std::os::unix::fs::OpenOptionsExt;
