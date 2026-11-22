@@ -27,6 +27,12 @@
   background: var(--color-accent-hover);
 }
 
+.primary:disabled {
+  opacity: 1;
+  background: var(--color-border-control);
+  color: var(--color-text-secondary);
+}
+
 .secondary {
   background: var(--color-surface);
   border-color: var(--color-border-control);
