@@ -697,7 +697,6 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::Attention;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
 
@@ -917,6 +916,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hook_signals_mark_and_clear_waiting() {
+        use crate::protocol::Attention;
         let root = temp_root();
         let (sessions, meta) = fake_claude_session(&root);
         let sessions_dir = root.join("sessions");
