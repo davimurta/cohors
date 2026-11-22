@@ -8,6 +8,7 @@ import type {
 } from '@cohors/protocol';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { isLive } from '../session/status.ts';
+import { pruneLayout } from './layout.ts';
 
 export type SidebarTab = 'active' | 'finished';
 
@@ -25,7 +26,10 @@ export interface SessionsState {
   /** Unknown until the daemon handshake completes. */
   claudeAvailable: boolean | null;
   sessions: SessionMeta[];
+  /** The focused session; always one of `panes` when any is shown. */
   selectedId: string | null;
+  /** Sessions shown together in the main area, in order. */
+  panes: string[];
   sidebarTab: SidebarTab;
   /** Summary text by session id, loaded when a finished session is opened. */
   summaries: Record<string, string | null>;
@@ -55,6 +59,7 @@ export const initialSessionsState: SessionsState = {
   claudeAvailable: null,
   sessions: [],
   selectedId: null,
+  panes: [],
   sidebarTab: 'active',
   summaries: {},
   transcript: null,
@@ -93,6 +98,24 @@ const PROJECT_ERROR_FALLBACK = 'Não foi possível salvar o projeto.';
 
 /** Applies a daemon message to the state. Pure, so it can be tested alone. */
 export function applyServerMessage(state: SessionsState, message: ServerMessage): SessionsState {
+  return syncLayout(reduce(state, message));
+}
+
+/** Keeps the panes in step with the selection and the sessions that are still live. */
+export function syncLayout(state: SessionsState): SessionsState {
+  const { selectedId, panes } = state;
+  let layout = { panes, selectedId };
+  if (selectedId === null) {
+    if (panes.length > 0) layout = { panes: [], selectedId };
+  } else if (!panes.includes(selectedId)) {
+    layout = { panes: [selectedId], selectedId };
+  }
+  layout = pruneLayout(layout, state.sessions);
+  if (layout.panes === panes && layout.selectedId === selectedId) return state;
+  return { ...state, panes: layout.panes, selectedId: layout.selectedId };
+}
+
+function reduce(state: SessionsState, message: ServerMessage): SessionsState {
   switch (message.type) {
     case 'ready':
       return { ...state, claudeAvailable: message.claudeAvailable };

@@ -236,6 +236,24 @@ describe('history', () => {
   });
 });
 
+describe('layout', () => {
+  it('leaves a split when one of its sessions exits', () => {
+    const state = applyServerMessage(
+      { ...withSessions(['a', 'b', 'c']), panes: ['a', 'b', 'c'], selectedId: 'a' },
+      { type: 'session.updated', session: { ...meta('b'), status: 'exited' } },
+    );
+    expect(state.panes).toEqual(['a', 'c']);
+  });
+
+  it('shows the first session alone on the first list', () => {
+    const state = applyServerMessage(initialSessionsState, {
+      type: 'session.list.result',
+      sessions: [meta('a'), meta('b')],
+    });
+    expect(state.panes).toEqual(['a']);
+  });
+});
+
 describe('applyConnectionStatus', () => {
   it('cancels a pending creation when the connection drops', () => {
     const state = applyConnectionStatus(

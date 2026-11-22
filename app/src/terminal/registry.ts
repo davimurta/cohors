@@ -27,7 +27,7 @@ class SessionTerminal {
   }
 
   /** Called once the host is in the document, so xterm can measure it. */
-  show(): void {
+  show(focus: boolean): void {
     if (!this.opened) {
       this.terminal.open(this.host);
       this.opened = true;
@@ -37,7 +37,7 @@ class SessionTerminal {
     this.fitToHost();
     // A resumed process starts at the PTY default size, so always report ours.
     this.sendResize();
-    this.terminal.focus();
+    if (focus) this.terminal.focus();
   }
 
   hide(): void {

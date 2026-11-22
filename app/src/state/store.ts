@@ -1,15 +1,18 @@
 import { create } from 'zustand';
 import type { Agent, ProjectSettings } from '@cohors/protocol';
 import { DaemonClient } from '../daemon/client.ts';
+import { closePane, selectSession, toggleSplit } from './layout.ts';
 import {
   applyConnectionStatus,
   applyServerMessage,
   firstInTab,
   inTab,
   initialSessionsState,
+  syncLayout,
   type SessionsState,
   type SidebarTab,
 } from './sessions.ts';
+import { isLive } from '../session/status.ts';
 
 export const daemon = new DaemonClient();
 
@@ -22,6 +25,9 @@ export interface CreateSessionRequest {
 
 interface SessionsActions {
   select: (id: string) => void;
+  /** Shows a live session next to the current ones, or takes it out. */
+  toggleSplit: (id: string) => void;
+  closePane: (id: string) => void;
   openNewSession: (projectId?: string) => void;
   closeNewSession: () => void;
   createSession: (request: CreateSessionRequest) => void;
@@ -49,7 +55,15 @@ interface SessionsActions {
 
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
   ...initialSessionsState,
-  select: (id) => set({ selectedId: id, resumeError: null, transcript: null }),
+  select: (id) =>
+    set((state) => {
+      const session = state.sessions.find((candidate) => candidate.id === id);
+      const live = session !== undefined && isLive(session.status);
+      const layout = selectSession(state, id, live);
+      return { ...layout, resumeError: null, transcript: null };
+    }),
+  toggleSplit: (id) => set((state) => ({ ...toggleSplit(state, id), transcript: null })),
+  closePane: (id) => set((state) => closePane(state, id)),
   openNewSession: (projectId) =>
     set({ newSessionOpen: true, newSessionProjectId: projectId ?? null, createError: null }),
   closeNewSession: () => set({ newSessionOpen: false, creating: false, createError: null }),
@@ -78,19 +92,21 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   retryConnection: () => daemon.retryNow(),
   restartDaemon: () => void daemon.restartDaemon(),
   shutdownDaemon: () => daemon.send({ type: 'daemon.shutdown' }),
-  setSidebarTab: (tab) => {
-    const { sessions, selectedId } = get();
-    const selected = sessions.find((session) => session.id === selectedId);
-    const keep = selected !== undefined && inTab(selected, tab);
-    set({
-      sidebarTab: tab,
-      selectedId: keep ? selectedId : firstInTab(sessions, tab),
-      transcript: null,
-    });
-  },
+  setSidebarTab: (tab) =>
+    set((state) => {
+      const selected = state.sessions.find((session) => session.id === state.selectedId);
+      const keep = selected !== undefined && inTab(selected, tab);
+      return syncLayout({
+        ...state,
+        sidebarTab: tab,
+        selectedId: keep ? state.selectedId : firstInTab(state.sessions, tab),
+        panes: keep ? state.panes : [],
+        transcript: null,
+      });
+    }),
   finishSession: (id, withSummary) => {
     // The session moves to the history; follow it there.
-    set({ sidebarTab: 'finished', selectedId: id, transcript: null });
+    set({ sidebarTab: 'finished', selectedId: id, panes: [id], transcript: null });
     daemon.send({ type: 'session.finish', id, withSummary });
   },
   retrySummary: (id) => daemon.send({ type: 'session.summarize', id }),

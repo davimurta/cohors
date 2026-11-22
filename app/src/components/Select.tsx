@@ -1,6 +1,7 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import styles from './Select.module.css';
+import { nextIndex, usePopover } from './usePopover.ts';
 
 export interface SelectOption {
   value: string;
@@ -17,9 +18,6 @@ interface SelectProps {
   'aria-describedby'?: string;
 }
 
-const GAP = 4;
-const MAX_LIST_HEIGHT = 240;
-
 /**
  * A select that looks like the text inputs. Keyboard: arrows and Home/End
  * move, Enter or Space picks, Esc closes without leaving the dialog.
@@ -31,7 +29,6 @@ export function Select({ id, labelId, value, options, onChange, ...rest }: Selec
   const listRef = useRef<HTMLUListElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const [position, setPosition] = useState({ left: 0, top: 0, width: 0 });
   const selectedIndex = Math.max(
     options.findIndex((option) => option.value === value),
     0,
@@ -43,43 +40,18 @@ export function Select({ id, labelId, value, options, onChange, ...rest }: Selec
     setOpen(true);
   };
 
-  const close = (focusTrigger: boolean) => {
+  const close = useCallback((focusTrigger: boolean) => {
     setOpen(false);
     if (focusTrigger) triggerRef.current?.focus();
-  };
+  }, []);
+  const dismiss = useCallback(() => close(false), [close]);
+  const position = usePopover(open, options.length, triggerRef, listRef, dismiss);
 
   const pick = (index: number) => {
     const option = options[index];
     if (option !== undefined) onChange(option.value);
     close(true);
   };
-
-  // Fixed positioning keeps the list visible inside dialogs that scroll or clip.
-  useLayoutEffect(() => {
-    const trigger = triggerRef.current;
-    if (!open || trigger === null) return;
-    const rect = trigger.getBoundingClientRect();
-    const height = Math.min(MAX_LIST_HEIGHT, options.length * 36 + 10);
-    const fitsBelow = rect.bottom + GAP + height <= window.innerHeight;
-    setPosition({
-      left: rect.left,
-      width: rect.width,
-      top: fitsBelow ? rect.bottom + GAP : rect.top - GAP - height,
-    });
-    listRef.current?.focus();
-  }, [open, options.length]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!listRef.current?.contains(target) && !triggerRef.current?.contains(target)) {
-        close(false);
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
 
   useEffect(() => {
     if (open) listRef.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' });
@@ -93,16 +65,10 @@ export function Select({ id, labelId, value, options, onChange, ...rest }: Selec
   };
 
   const onListKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
-    const last = options.length - 1;
-    const moves: Record<string, number> = {
-      ArrowDown: Math.min(active + 1, last),
-      ArrowUp: Math.max(active - 1, 0),
-      Home: 0,
-      End: last,
-    };
-    if (event.key in moves) {
+    const next = nextIndex(event.key, active, options.length);
+    if (next !== null) {
       event.preventDefault();
-      setActive(moves[event.key] ?? active);
+      setActive(next);
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       pick(active);

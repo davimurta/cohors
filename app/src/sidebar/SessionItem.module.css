@@ -15,6 +15,10 @@
   background: var(--color-segmented);
 }
 
+.item[data-shown='true'] {
+  border-color: var(--color-border-subtle);
+}
+
 .item[aria-current='true'] {
   background: var(--color-surface);
   border-color: var(--color-border-subtle);

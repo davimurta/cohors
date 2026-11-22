@@ -3,6 +3,7 @@ import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
 import { TerminalPane } from '../terminal/TerminalPane.tsx';
+import { SplitMenu } from '../split/SplitMenu.tsx';
 import { useAppStore } from '../state/store.ts';
 import { EndedPanel } from './EndedPanel.tsx';
 import { FinishButton } from './FinishButton.tsx';
@@ -51,6 +52,7 @@ export function SessionView({ session }: { session: SessionMeta }) {
         </div>
         {live && (
           <div className={styles.actions}>
+            <SplitMenu />
             <Button
               icon={<FileText size={16} aria-hidden="true" />}
               onClick={() => openNotes(session.id)}

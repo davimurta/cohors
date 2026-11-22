@@ -1,7 +1,10 @@
+import type { MouseEvent } from 'react';
 import type { SessionMeta } from '@cohors/protocol';
 import { StatusDot } from '../components/StatusDot.tsx';
 import { AGENT_LABEL, displayPath, formatDuration, formatSpan } from '../session/format.ts';
-import { STATUS_LABEL } from '../session/status.ts';
+import { isMac } from '../platform.ts';
+import { STATUS_LABEL, isLive } from '../session/status.ts';
+import { useAppStore } from '../state/store.ts';
 import styles from './SessionItem.module.css';
 
 interface SessionItemProps {
@@ -13,12 +16,25 @@ interface SessionItemProps {
 }
 
 export function SessionItem({ session, selected, home, now, onSelect }: SessionItemProps) {
+  const toggleSplit = useAppStore((state) => state.toggleSplit);
+  const shown = useAppStore(
+    (state) => state.panes.length > 1 && state.panes.includes(session.id),
+  );
+
+  // Cmd+click (Ctrl+click off macOS) shows a live session next to the others.
+  const onClick = (event: MouseEvent) => {
+    const split = isMac ? event.metaKey : event.ctrlKey;
+    if (split && isLive(session.status)) toggleSplit(session.id);
+    else onSelect(session.id);
+  };
+
   return (
     <button
       type="button"
       className={styles.item}
       aria-current={selected}
-      onClick={() => onSelect(session.id)}
+      data-shown={shown}
+      onClick={onClick}
     >
       <StatusDot status={session.status} />
       <span className={styles.text}>
