@@ -191,7 +191,53 @@ describe('projects', () => {
       { type: 'error', code: 'invalid_cwd', message: 'folder does not exist', ref: 'p' },
     );
     expect(state.savingProject).toBe(false);
-    expect(state.projectError).toBe('A pasta raiz não existe. Escolha outra.');
+    expect(state.projectError).toBe('A pasta escolhida não existe. Escolha outra.');
+  });
+});
+
+describe('project context', () => {
+  const editor = { projectId: 'p', files: null, saving: false, error: null };
+  const files = { dir: '/data/contexts/p', rules: 'Use tabs.', plan: '1. Login' };
+  const result = { type: 'project.context.result', id: 'p', ...files } as const;
+
+  it('fills the editor when the files arrive', () => {
+    const state = applyServerMessage({ ...withSessions([]), contextEditor: editor }, result);
+    expect(state.contextEditor?.files).toEqual(files);
+  });
+
+  it('ignores files of another project', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), contextEditor: editor },
+      { ...result, id: 'other' },
+    );
+    expect(state.contextEditor?.files).toBeNull();
+  });
+
+  it('closes the editor after a save', () => {
+    const saving = { ...editor, files, saving: true };
+    const state = applyServerMessage({ ...withSessions([]), contextEditor: saving }, result);
+    expect(state.contextEditor).toBeNull();
+  });
+
+  it('keeps the text and shows the error when a save fails', () => {
+    const saving = { ...editor, files, saving: true };
+    const state = applyServerMessage(
+      { ...withSessions([]), contextEditor: saving },
+      { type: 'error', code: 'internal', message: 'disk full', ref: 'p' },
+    );
+    expect(state.contextEditor).toEqual({
+      ...saving,
+      saving: false,
+      error: 'Não foi possível salvar as regras e o plano.',
+    });
+  });
+
+  it('closes the editor when its project is deleted', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), contextEditor: editor },
+      { type: 'project.list.result', projects: [] },
+    );
+    expect(state.contextEditor).toBeNull();
   });
 });
 

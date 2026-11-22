@@ -19,6 +19,14 @@ export interface TranscriptView {
   truncated: boolean;
 }
 
+export interface ContextEditor {
+  projectId: string;
+  /** null until the daemon sends the files. */
+  files: { dir: string; rules: string; plan: string } | null;
+  saving: boolean;
+  error: string | null;
+}
+
 export interface SessionsState {
   connection: ConnectionStatus;
   /** Technical reason shown on the daemon error screens. */
@@ -51,6 +59,8 @@ export interface SessionsState {
   projectDialog: { projectId: string | null } | null;
   savingProject: boolean;
   projectError: string | null;
+  /** Open editor of a project's rules and plan. */
+  contextEditor: ContextEditor | null;
 }
 
 export const initialSessionsState: SessionsState = {
@@ -76,6 +86,7 @@ export const initialSessionsState: SessionsState = {
   projectDialog: null,
   savingProject: false,
   projectError: null,
+  contextEditor: null,
 };
 
 const CREATE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -91,10 +102,14 @@ const RESUME_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
 const RESUME_ERROR_FALLBACK = 'Não foi possível retomar a sessão.';
 
 const PROJECT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
-  invalid_cwd: 'A pasta raiz não existe. Escolha outra.',
+  invalid_cwd: 'A pasta escolhida não existe. Escolha outra.',
   project_not_found: 'Este projeto não existe mais.',
 };
 const PROJECT_ERROR_FALLBACK = 'Não foi possível salvar o projeto.';
+
+const CONTEXT_READ_ERROR = 'Não foi possível ler as regras e o plano.';
+const CONTEXT_SAVE_ERROR = 'Não foi possível salvar as regras e o plano.';
+const PROJECT_GONE_ERROR = 'Este projeto não existe mais.';
 
 /** Applies a daemon message to the state. Pure, so it can be tested alone. */
 export function applyServerMessage(state: SessionsState, message: ServerMessage): SessionsState {
@@ -141,21 +156,36 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
       };
     case 'accounts.list.result':
       return { ...state, claudeAccounts: message.claudeAccounts, sshKeys: message.sshKeys };
-    case 'project.list.result':
+    case 'project.list.result': {
+      const projects = message.projects;
+      const editor = state.contextEditor;
+      const contextEditor =
+        editor !== null && projects.some((project) => project.id === editor.projectId)
+          ? editor
+          : null;
       // A save this client asked for succeeded: close its dialog.
-      if (!state.savingProject) return { ...state, projects: message.projects };
+      if (!state.savingProject) return { ...state, projects, contextEditor };
       return {
         ...state,
-        projects: message.projects,
+        projects,
+        contextEditor,
         savingProject: false,
         projectDialog: null,
         projectError: null,
       };
+    }
+    case 'project.context.result': {
+      const editor = state.contextEditor;
+      if (editor?.projectId !== message.id) return state;
+      // A save went through: the editor closes.
+      if (editor.saving) return { ...state, contextEditor: null };
+      const { dir, rules, plan } = message;
+      return { ...state, contextEditor: { ...editor, files: { dir, rules, plan } } };
+    }
     case 'error':
       return requestFailed(state, message.code, message.ref);
     case 'session.snapshot':
     case 'session.output':
-    case 'project.context.result':
       return state;
   }
 }
@@ -174,6 +204,7 @@ export function applyConnectionStatus(
     creating: false,
     resumingId: null,
     savingProject: false,
+    contextEditor: null,
   };
 }
 
@@ -221,6 +252,17 @@ function requestFailed(state: SessionsState, code: ErrorCode, ref?: string): Ses
       savingProject: false,
       projectError: PROJECT_ERROR_MESSAGES[code] ?? PROJECT_ERROR_FALLBACK,
     };
+  }
+  const editor = state.contextEditor;
+  if (editor !== null && ref === editor.projectId) {
+    const reading = editor.files === null;
+    const error =
+      code === 'project_not_found'
+        ? PROJECT_GONE_ERROR
+        : reading
+          ? CONTEXT_READ_ERROR
+          : CONTEXT_SAVE_ERROR;
+    return { ...state, contextEditor: { ...editor, saving: false, error } };
   }
   if (ref !== undefined && ref === state.resumingId) {
     return {

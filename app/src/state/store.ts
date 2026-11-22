@@ -51,6 +51,9 @@ interface SessionsActions {
   closeProjectDialog: () => void;
   saveProject: (settings: ProjectSettings) => void;
   deleteProject: (id: string) => void;
+  openContext: (projectId: string) => void;
+  closeContext: () => void;
+  saveContext: (rules: string, plan: string) => void;
 }
 
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
@@ -144,6 +147,17 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   deleteProject: (id) => {
     set({ projectDialog: null });
     daemon.send({ type: 'project.delete', id });
+  },
+  openContext: (projectId) => {
+    set({ contextEditor: { projectId, files: null, saving: false, error: null } });
+    daemon.send({ type: 'project.context.get', id: projectId });
+  },
+  closeContext: () => set({ contextEditor: null }),
+  saveContext: (rules, plan) => {
+    const editor = get().contextEditor;
+    if (editor === null || editor.saving) return;
+    set({ contextEditor: { ...editor, saving: true, error: null } });
+    daemon.send({ type: 'project.context.save', id: editor.projectId, rules, plan });
   },
 }));
 

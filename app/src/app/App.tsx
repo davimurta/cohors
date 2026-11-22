@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { DaemonErrorScreen } from '../daemon-error/DaemonErrorScreen.tsx';
 import { NewSessionDialog } from '../new-session/NewSessionDialog.tsx';
+import { ContextDialog } from '../projects/ContextDialog.tsx';
 import { ProjectDialog } from '../projects/ProjectDialog.tsx';
 import { NotesDialog } from '../session/NotesDialog.tsx';
 import { Sidebar } from '../sidebar/Sidebar.tsx';
@@ -35,6 +36,7 @@ export function App() {
       )}
       <NewSessionDialog />
       <ProjectDialog />
+      <ContextDialog />
       <NotesDialog />
     </div>
   );

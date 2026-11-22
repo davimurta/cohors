@@ -1,4 +1,4 @@
-import { FolderPlus, Pencil, Plus } from 'lucide-react';
+import { FileText, FolderPlus, Pencil, Plus } from 'lucide-react';
 import type { Project, SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { groupSessions } from '../projects/groupSessions.ts';
@@ -65,6 +65,7 @@ export function SessionList({ sessions, selectedId, home, onSelect }: SessionLis
 
 function GroupHeader({ project, onEdit }: { project: Project | null; onEdit: () => void }) {
   const openNewSession = useAppStore((state) => state.openNewSession);
+  const openContext = useAppStore((state) => state.openContext);
   if (project === null) {
     return (
       <div className={styles.groupHeader}>
@@ -85,6 +86,15 @@ function GroupHeader({ project, onEdit }: { project: Project | null; onEdit: () 
         onClick={() => openNewSession(project.id)}
       >
         <Plus size={14} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className={styles.iconButton}
+        aria-label={`Regras e plano de ${project.name}`}
+        title="Regras e plano"
+        onClick={() => openContext(project.id)}
+      >
+        <FileText size={14} aria-hidden="true" />
       </button>
       <button
         type="button"

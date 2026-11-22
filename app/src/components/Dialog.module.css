@@ -9,6 +9,10 @@
   box-shadow: var(--shadow-modal);
 }
 
+.wide {
+  max-width: 720px;
+}
+
 .dialog::backdrop {
   background: var(--color-backdrop);
 }

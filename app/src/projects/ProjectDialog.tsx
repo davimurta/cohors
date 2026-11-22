@@ -44,6 +44,7 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
   const [root, setRoot] = useState(project?.root ?? '');
   const [account, setAccount] = useState(project?.claudeConfigDir ?? DEFAULT_OPTION);
   const [sshKey, setSshKey] = useState(project?.sshKey ?? DEFAULT_OPTION);
+  const [contextDir, setContextDir] = useState(project?.contextDir ?? '');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const ids = {
     name: useId(),
@@ -53,6 +54,7 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
     key: useId(),
     keyLabel: useId(),
     keyHint: useId(),
+    context: useId(),
   };
   const complete = name.trim() !== '' && root !== '';
 
@@ -64,7 +66,7 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
       root,
       claudeConfigDir: account === DEFAULT_OPTION ? null : account,
       sshKey: sshKey === DEFAULT_OPTION ? null : sshKey,
-      contextDir: project?.contextDir ?? null,
+      contextDir: contextDir === '' ? null : contextDir,
     });
   };
 
@@ -126,6 +128,21 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
         </span>
       </div>
 
+      <FolderField
+        id={ids.context}
+        label="Pasta de regras e plano"
+        value={contextDir}
+        startIn={root === '' ? undefined : root}
+        placeholder="Guardada pelo Cohors"
+        hint={
+          project === undefined
+            ? 'Opcional. Escolha uma pasta sua para guardar regras.md e plano.md.'
+            : 'Opcional. Ao trocar de pasta, os arquivos atuais não são movidos.'
+        }
+        onChange={setContextDir}
+        onClear={() => setContextDir('')}
+      />
+
       {error !== null && (
         <p role="alert" className={field.error}>
           {error}
@@ -158,6 +175,7 @@ function ProjectForm({ project, onCancel }: { project: Project | undefined; onCa
           onClose={() => setConfirmingDelete(false)}
         >
           O projeto {project.name} será excluído. As sessões dele continuam rodando, sem projeto.
+          {project.contextDir === null && ' As regras e o plano guardados pelo Cohors também são apagados.'}
         </ConfirmDialog>
       )}
     </form>

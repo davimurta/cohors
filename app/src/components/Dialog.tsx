@@ -6,6 +6,8 @@ interface DialogProps {
   open: boolean;
   title: string;
   onClose: () => void;
+  /** Room for longer text, like the project context editor. */
+  wide?: boolean;
   children: ReactNode;
 }
 
@@ -14,7 +16,7 @@ interface DialogProps {
  * page inert, Esc closes it, and focus goes back to the opener on close.
  * Mark the element that should get focus first with `data-autofocus`.
  */
-export function Dialog({ open, title, onClose, children }: DialogProps) {
+export function Dialog({ open, title, onClose, wide = false, children }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
 
@@ -34,7 +36,7 @@ export function Dialog({ open, title, onClose, children }: DialogProps) {
   return (
     <dialog
       ref={dialogRef}
-      className={styles.dialog}
+      className={wide ? `${styles.dialog} ${styles.wide}` : styles.dialog}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
