@@ -285,6 +285,39 @@ async fn handle_message(
             .rename(&id, &name)
             .err()
             .map(|error| request_error(error.code(), &error, &id)),
+        ClientMessage::SessionConversation { id } => {
+            let task_state = Arc::clone(state);
+            let task_id = id.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                task_state.sessions.conversation(&task_id, &task_state.home)
+            })
+            .await;
+            Some(match result {
+                Ok(Ok(conversation)) => {
+                    let (entries, usage) = match conversation {
+                        Some(conversation) => {
+                            (Some(conversation.entries), Some(conversation.usage))
+                        }
+                        None => (None, None),
+                    };
+                    ServerMessage::SessionConversationResult { id, entries, usage }
+                }
+                Ok(Err(error)) => request_error(error.code(), &error, &id),
+                Err(error) => request_error(ErrorCode::Internal, &error, &id),
+            })
+        }
+        ClientMessage::SessionSearch { query } => {
+            let task_state = Arc::clone(state);
+            let task_query = query.clone();
+            let ids = tokio::task::spawn_blocking(move || {
+                task_state.sessions.search(&task_query, &task_state.home)
+            })
+            .await;
+            Some(match ids {
+                Ok(ids) => ServerMessage::SessionSearchResult { query, ids },
+                Err(error) => request_error(ErrorCode::Internal, &error, "session.search"),
+            })
+        }
         ClientMessage::SessionTranscript { id } => Some(
             state
                 .sessions

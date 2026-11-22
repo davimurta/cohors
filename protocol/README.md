@@ -26,6 +26,8 @@ The daemon answers `ready` with its versions and whether `claude` is in its PATH
 | `session.skipSummary {id}` | Cancels a pending summary or gives up on a failed one; `summaryStatus` becomes `none` |
 | `session.getSummary {id}` | Replies `session.summary` with the saved text |
 | `session.notes {id, notes}` | Saves the notes; every client receives `session.updated` |
+| `session.conversation {id}` | Replies `session.conversation.result {id, entries, usage}` from Claude Code's own log of the conversation (`<config dir>/projects/*/<agentSessionId>.jsonl`): user and assistant text, one entry per tool call (`"Bash: npm test"`), and the token totals. Thinking, tool results and subagents are left out. Both fields are null for shells and for Claude sessions without a log |
+| `session.search {query}` | Replies `session.search.result {query, ids}`: finished sessions whose name, notes, summary or conversation text contain the query, ignoring case. A blank query returns no ids |
 | `session.rename {id, name}` | Renames any session, finished ones included. The name is trimmed; a blank one is `bad_request`. Every client receives `session.updated` |
 | `session.transcript {id}` | Replies `session.transcript.result {id, data, truncated}` with the last 2 MB of output |
 | `session.delete {id}` | Deletes a finished session's folder; every client receives `session.deleted {id}` |

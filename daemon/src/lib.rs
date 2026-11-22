@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod context;
 pub mod control;
+pub mod conversation;
 pub mod daemon_file;
 pub mod executable;
 pub mod hooks;

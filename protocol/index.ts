@@ -57,6 +57,24 @@ export interface Project extends ProjectSettings {
   id: string;
 }
 
+/** A message of a Claude conversation, or one line per tool call. */
+export interface ConversationEntry {
+  role: 'user' | 'assistant';
+  kind: 'text' | 'tool';
+  text: string;
+  timestamp: string | null;
+}
+
+/** Tokens of every model request in a conversation. */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** Models used, in order of first use. */
+  models: string[];
+}
+
 export interface ClaudeAccount {
   /** null for the default account. */
   configDir: string | null;
@@ -95,6 +113,8 @@ export type ClientMessage =
   | { type: 'session.getSummary'; id: string }
   | { type: 'session.notes'; id: string; notes: string }
   | { type: 'session.rename'; id: string; name: string }
+  | { type: 'session.conversation'; id: string }
+  | { type: 'session.search'; query: string }
   | { type: 'session.transcript'; id: string }
   | { type: 'session.delete'; id: string }
   | { type: 'daemon.shutdown' }
@@ -114,6 +134,13 @@ export type ServerMessage =
   | { type: 'session.summary'; id: string; status: SummaryStatus; text: string | null }
   | { type: 'session.deleted'; id: string }
   | { type: 'session.transcript.result'; id: string; data: string; truncated: boolean }
+  | {
+      type: 'session.conversation.result';
+      id: string;
+      entries: ConversationEntry[] | null;
+      usage: TokenUsage | null;
+    }
+  | { type: 'session.search.result'; query: string; ids: string[] }
   | { type: 'accounts.list.result'; claudeAccounts: ClaudeAccount[]; sshKeys: SshKey[] }
   | { type: 'project.list.result'; projects: Project[] }
   | { type: 'project.context.result'; id: string; dir: string; rules: string; plan: string }

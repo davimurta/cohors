@@ -2,6 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::conversation::{Entry as ConversationEntry, Usage as TokenUsage};
+
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -56,6 +58,10 @@ pub enum ClientMessage {
     SessionNotes { id: String, notes: String },
     #[serde(rename = "session.rename")]
     SessionRename { id: String, name: String },
+    #[serde(rename = "session.conversation")]
+    SessionConversation { id: String },
+    #[serde(rename = "session.search")]
+    SessionSearch { query: String },
     #[serde(rename = "session.transcript")]
     SessionTranscript { id: String },
     /// Only finished sessions can be deleted.
@@ -255,6 +261,17 @@ pub enum ServerMessage {
         /// True when older output was left out.
         truncated: bool,
     },
+    /// The Claude conversation of a session. Both null when there is none:
+    /// a shell, or a Claude session that never got a prompt.
+    #[serde(rename = "session.conversation.result")]
+    SessionConversationResult {
+        id: String,
+        entries: Option<Vec<ConversationEntry>>,
+        usage: Option<TokenUsage>,
+    },
+    /// Finished sessions that match `query`; empty for a blank query.
+    #[serde(rename = "session.search.result")]
+    SessionSearchResult { query: String, ids: Vec<String> },
     #[serde(rename = "accounts.list.result")]
     AccountsListResult {
         claude_accounts: Vec<ClaudeAccount>,

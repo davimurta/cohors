@@ -10,6 +10,7 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::conversation::{self, Conversation};
 use crate::executable;
 use crate::hooks::{self, Signal};
 use crate::protocol::{
@@ -399,6 +400,45 @@ impl Sessions {
         })
     }
 
+    /// The Claude conversation of a session, when Claude wrote a log for it.
+    /// `home` locates the default Claude config folder.
+    pub fn conversation(
+        &self,
+        id: &str,
+        home: &Path,
+    ) -> Result<Option<Conversation>, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let meta = lock(&entry.meta)?.clone();
+        Ok(conversation_of(&meta, home))
+    }
+
+    /// Finished sessions whose name, notes, summary or conversation text
+    /// contain `query`, ignoring case, in creation order.
+    pub fn search(&self, query: &str, home: &Path) -> Vec<String> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let contains = |text: &str| text.to_lowercase().contains(&query);
+        self.list()
+            .into_iter()
+            .filter(|meta| meta.status == SessionStatus::Finished)
+            .filter(|meta| {
+                contains(&meta.name)
+                    || contains(&meta.notes)
+                    || self
+                        .store
+                        .read_summary(&meta.id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|summary| contains(&summary))
+                    || conversation_of(meta, home)
+                        .is_some_and(|conversation| conversation.mentions(&query))
+            })
+            .map(|meta| meta.id)
+            .collect()
+    }
+
     pub fn transcript(&self, id: &str) -> Result<ServerMessage, SessionsError> {
         self.get(id).ok_or(SessionsError::NotFound)?;
         let bytes = self.store.read_transcript(id, TRANSCRIPT_VIEW_BYTES + 1)?;
@@ -636,6 +676,23 @@ fn launch_for(
         path: Some(path.to_os_string()),
         env: environment(meta),
     })
+}
+
+/// Claude keeps its logs in the session's config folder: the project's
+/// account, or `~/.claude` for the default one.
+fn conversation_of(meta: &SessionMeta, home: &Path) -> Option<Conversation> {
+    if meta.agent != Agent::Claude {
+        return None;
+    }
+    let session_id = meta.agent_session_id.as_deref()?;
+    let config_dir = meta
+        .claude_config_dir
+        .as_ref()
+        .map_or_else(|| home.join(".claude"), PathBuf::from);
+    let path = conversation::find_log(&config_dir, session_id)?;
+    conversation::read(&path)
+        .map_err(|error| eprintln!("failed to read conversation {}: {error}", meta.id))
+        .ok()
 }
 
 /// Hooks for a Claude session, with its project context while the folder
@@ -951,6 +1008,72 @@ mod tests {
         assert_eq!(attention(&sessions), None);
 
         sessions.shutdown();
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn search_looks_at_name_notes_summary_and_conversation() {
+        let root = temp_root();
+        let store = SessionStore::new(root.join("sessions"));
+        let config = root.join("claude");
+        let log_dir = config.join("projects").join("-dev-api");
+        std::fs::create_dir_all(&log_dir).expect("log dir");
+        std::fs::write(
+            log_dir.join("conv.jsonl"),
+            r#"{"type":"user","message":{"content":"Fix the OAuth callback"}}"#,
+        )
+        .expect("log");
+        let finished = |id: &str| SessionMeta {
+            status: SessionStatus::Finished,
+            ..meta(id)
+        };
+        store
+            .save(&SessionMeta {
+                name: "Billing".into(),
+                ..finished("by-name")
+            })
+            .expect("save");
+        store
+            .save(&SessionMeta {
+                notes: "check billing later".into(),
+                ..finished("by-notes")
+            })
+            .expect("save");
+        store.save(&finished("by-summary")).expect("save");
+        store
+            .save_summary("by-summary", "Billing page done")
+            .expect("summary");
+        store
+            .save(&SessionMeta {
+                agent: Agent::Claude,
+                agent_session_id: Some("conv".into()),
+                claude_config_dir: Some(config.display().to_string()),
+                ..finished("by-conversation")
+            })
+            .expect("save");
+        store
+            .save(&SessionMeta {
+                name: "billing live".into(),
+                status: SessionStatus::Exited,
+                ..meta("not-finished")
+            })
+            .expect("save");
+
+        let sessions = Sessions::load(store, OsString::new());
+        let mut billing = sessions.search(" BILLING ", &root);
+        billing.sort();
+        assert_eq!(billing, ["by-name", "by-notes", "by-summary"]);
+        assert_eq!(sessions.search("oauth", &root), ["by-conversation"]);
+        assert!(sessions.search("  ", &root).is_empty());
+        let conversation = sessions
+            .conversation("by-conversation", &root)
+            .expect("known")
+            .expect("log");
+        assert_eq!(conversation.entries.len(), 1);
+        assert_eq!(
+            sessions.conversation("by-name", &root).expect("known"),
+            None
+        );
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 
