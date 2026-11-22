@@ -16,6 +16,8 @@ use crate::utf8::Utf8Decoder;
 const RING_BUFFER_BYTES: usize = 1024 * 1024;
 const LIVE_CHANNEL_CHUNKS: usize = 1024;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
+/// How long an exit waits for the final output to be read.
+const OUTPUT_DRAIN: Duration = Duration::from_secs(1);
 /// Output right after a resize is the program repainting, not activity.
 const REPAINT_WINDOW: Duration = Duration::from_secs(1);
 const INITIAL_SIZE: PtySize = PtySize {
@@ -170,11 +172,19 @@ impl Session {
         let pid = child.process_id();
         let alive = Arc::new(AtomicBool::new(true));
         let output = Arc::clone(&self.output);
-        let reader_alive = Arc::clone(&alive);
+        let (reader_done, reader_finished) = mpsc::channel::<()>();
         thread::spawn(move || {
             pump_output(reader, &output);
+            let _ = reader_done.send(());
+        });
+        // Waiting for the child apart from reading: ConPTY on Windows keeps
+        // the output open after the child exits, so EOF never comes there.
+        let waiter_alive = Arc::clone(&alive);
+        thread::spawn(move || {
             let exit_code = child.wait().ok().map(|status| status.exit_code());
-            reader_alive.store(false, Ordering::SeqCst);
+            waiter_alive.store(false, Ordering::SeqCst);
+            // Let the last output land before announcing the exit.
+            let _ = reader_finished.recv_timeout(OUTPUT_DRAIN);
             on_exit(exit_code);
         });
 
