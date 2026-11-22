@@ -34,7 +34,10 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 
 - [ ] Finalizar on a Claude session shows the progress screen and then the summary.
 - [ ] A summary failure offers Tentar de novo and Finalizar sem resumo.
-- [ ] Copiar resumo copies the text; Ver transcript shows the session output; Excluir removes it.
+- [ ] Copiar resumo copies the text; Excluir removes the session.
+- [ ] Ver transcript of a Claude session opens on Conversa (your prompts, Claude's answers with code blocks, one line per tool) and Terminal shows the raw output; a shell only has Terminal.
+- [ ] Detalhes of a finished Claude session shows the model and token counts.
+- [ ] The search box in Finalizadas finds sessions by name, notes, summary and conversation text; Esc clears it.
 
 ## Accessibility
 
