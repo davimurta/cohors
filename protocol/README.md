@@ -73,7 +73,7 @@ A project groups sessions and gives them a root folder, a Claude account and an 
 
 Each project has a context folder with `regras.md` (rules) and `plano.md` (plan). By default it is `contexts/<projectId>` in the user data directory; `contextDir` points it at a folder of the user's choice instead. Deleting a project removes the default folder and leaves a chosen one alone.
 
-`session.create {projectId}` also stores the folder in the session as `contextDir` (creating the default one). Claude sessions start and resume with `--add-dir <contextDir>`, so Claude can read and edit the files, and `--settings` with a `SessionStart` hook that runs `cohors-daemon --print-context <contextDir>`. The hook prints both files under a short header, so Claude gets the current text on every start, resume and compaction. Blank files print nothing. When the folder no longer exists the flags are left out. Shells ignore the context.
+`session.create {projectId}` also stores the folder in the session as `contextDir` (creating the default one). Claude sessions start and resume with `--add-dir <contextDir>`, so Claude can read and edit the files, and `--settings` with a `SessionStart` hook that runs `cohors-daemon --print-context <contextDir>`. The hook prints both files under a short header, so Claude gets the current text on every start, resume and compaction. Blank files print nothing. When the folder no longer exists the context is left out. Shells ignore the context.
 
 ### Waiting for the user
 

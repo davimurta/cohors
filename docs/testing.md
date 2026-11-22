@@ -18,6 +18,10 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Restarting the computer: sessions come back as Interrompida and a Claude session resumes its conversation.
 - [ ] A quiet session turns Ociosa after about 10 seconds and back to Rodando on output.
 - [ ] Cmd+click (Ctrl+click) shows up to four terminals side by side; typing goes to the focused one.
+- [ ] Cmd+1 to Cmd+9 (Ctrl elsewhere) open the active sessions in sidebar order, also from a focused terminal.
+- [ ] Cmd+W (Ctrl+Shift+W elsewhere) closes the focused pane of a split and does nothing with a single pane; Shift+Cmd+W closes the window on macOS. Copy and paste still work in dialogs and terminals.
+- [ ] Renaming from the pencil next to the title, or a double click in the sidebar, updates every open window.
+- [ ] When Claude finishes an answer or asks for a permission, its session shows "Aguardando você" and, if it is not on screen or the window is in the background, a system notification appears (macOS asks for permission once). Typing in the session clears the mark.
 
 ## Projects
 
