@@ -18,6 +18,7 @@ import { RenameButton } from '../rename/RenameButton.tsx';
 import { useAppStore } from '../state/store.ts';
 import { CopyButton } from './CopyButton.tsx';
 import { SummaryText } from './SummaryText.tsx';
+import { WorktreeCard } from './WorktreeCard.tsx';
 import styles from './HistoryView.module.css';
 
 /** A finished session: summary, details and notes. */
@@ -82,6 +83,9 @@ export function HistoryView({ session }: { session: SessionMeta }) {
               {session.agent === 'claude' && <UsageDetails sessionId={session.id} />}
             </dl>
           </section>
+          {session.worktree !== null && (
+            <WorktreeCard session={session} worktree={session.worktree} />
+          )}
           <NotesCard session={session} />
         </div>
       </div>
@@ -95,6 +99,8 @@ export function HistoryView({ session }: { session: SessionMeta }) {
       >
         O resumo, as notas e o transcript de {session.name} serão apagados. Isso não pode ser
         desfeito.
+        {session.worktree !== null &&
+          ' A worktree não é apagada: remova antes no card Worktree, se quiser.'}
       </ConfirmDialog>
     </main>
   );

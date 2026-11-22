@@ -28,6 +28,7 @@ const session = (id: string, status: SessionStatus): SessionMeta => ({
   sshKey: null,
   contextDir: null,
   attention: null,
+  worktree: null,
   notes: '',
   summaryStatus: 'none',
 });

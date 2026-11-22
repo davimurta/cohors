@@ -54,6 +54,7 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
   const [projectId, setProjectId] = useState(presetProject?.id ?? NO_PROJECT);
   const [cwd, setCwd] = useState(presetProject?.root ?? '');
   const [name, setName] = useState('');
+  const [worktree, setWorktree] = useState(false);
   const ids = {
     agent: useId(),
     project: useId(),
@@ -62,6 +63,8 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
     folder: useId(),
     name: useId(),
     nameHint: useId(),
+    worktree: useId(),
+    worktreeHint: useId(),
   };
   const project = projects.find((candidate) => candidate.id === projectId);
 
@@ -75,7 +78,7 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (cwd === '' || creating) return;
-    createSession({ agent, cwd, name, projectId: project?.id ?? null });
+    createSession({ agent, cwd, name, projectId: project?.id ?? null, worktree });
   };
 
   return (
@@ -160,6 +163,26 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
         <span id={ids.nameHint} className={field.hint}>
           Se ficar em branco, usamos o nome da pasta.
         </span>
+      </div>
+
+      <div className={styles.checkField}>
+        <input
+          id={ids.worktree}
+          type="checkbox"
+          className={styles.checkbox}
+          checked={worktree}
+          aria-describedby={ids.worktreeHint}
+          onChange={(event) => setWorktree(event.target.checked)}
+        />
+        <div className={styles.checkText}>
+          <label htmlFor={ids.worktree} className={field.label}>
+            Isolar em worktree
+          </label>
+          <span id={ids.worktreeHint} className={field.hint}>
+            Cria uma branch e uma pasta só para esta sessão, a partir do commit atual. A pasta
+            precisa estar num repositório git.
+          </span>
+        </div>
       </div>
 
       {createError !== null && (

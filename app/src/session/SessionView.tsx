@@ -1,4 +1,4 @@
-import { FileText, Folder } from 'lucide-react';
+import { FileText, Folder, GitBranch } from 'lucide-react';
 import type { SessionMeta } from '@cohors/protocol';
 import { Button } from '../components/Button.tsx';
 import { StatusPill } from '../components/StatusPill.tsx';
@@ -35,6 +35,12 @@ export function SessionView({ session }: { session: SessionMeta }) {
                 <Folder size={14} aria-hidden="true" />
                 {displayPath(session.cwd, home)}
               </span>
+              {session.worktree !== null && (
+                <span className={styles.folder} title="Worktree isolada desta sessão">
+                  <GitBranch size={14} aria-hidden="true" />
+                  {session.worktree.branch}
+                </span>
+              )}
               <span>{AGENT_LABEL[session.agent]}</span>
               <span>Iniciada {formatElapsed(session.createdAt, now)}</span>
             </div>

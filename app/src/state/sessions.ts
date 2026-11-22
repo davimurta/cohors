@@ -7,6 +7,7 @@ import type {
   SessionMeta,
   SshKey,
   TokenUsage,
+  WorktreeStatus,
 } from '@cohors/protocol';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { isLive } from '../session/status.ts';
@@ -26,6 +27,16 @@ export interface TranscriptView {
 export interface Conversation {
   entries: ConversationEntry[] | null;
   usage: TokenUsage | null;
+}
+
+/** What the history knows about a session's worktree. */
+export interface WorktreeView {
+  /** null until the daemon answers. */
+  status: WorktreeStatus | null;
+  removing: boolean;
+  /** After a removal: whether the branch went too. */
+  branchDeleted: boolean | null;
+  error: string | null;
 }
 
 export interface HistorySearch {
@@ -62,6 +73,8 @@ export interface SessionsState {
   transcript: TranscriptView | null;
   /** Conversations by session id, loaded on demand. */
   conversations: Record<string, Conversation>;
+  /** Worktrees by session id, loaded when the history shows one. */
+  worktrees: Record<string, WorktreeView>;
   /** Search in the finished sessions; null when the box is empty. */
   historySearch: HistorySearch | null;
   /** Session whose notes dialog is open. */
@@ -100,6 +113,7 @@ export const initialSessionsState: SessionsState = {
   summaries: {},
   transcript: null,
   conversations: {},
+  worktrees: {},
   historySearch: null,
   notesId: null,
   renameId: null,
@@ -121,6 +135,9 @@ export const initialSessionsState: SessionsState = {
 const CREATE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   invalid_cwd: 'Essa pasta não existe. Escolha outra.',
   agent_not_found: 'Claude Code não encontrado. Instale o CLI ou escolha Shell.',
+  not_a_repository: 'Essa pasta não está num repositório git. Desmarque a worktree ou escolha outra.',
+  no_commits: 'O repositório ainda não tem commits, então não dá para criar a worktree.',
+  git_failed: 'O git não conseguiu criar a worktree.',
 };
 const CREATE_ERROR_FALLBACK = 'Não foi possível criar a sessão.';
 
@@ -135,6 +152,12 @@ const PROJECT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   project_not_found: 'Este projeto não existe mais.',
 };
 const PROJECT_ERROR_FALLBACK = 'Não foi possível salvar o projeto.';
+
+const WORKTREE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  worktree_dirty: 'A worktree tem mudanças sem commit. Faça commit ou descarte antes de remover.',
+  invalid_state: 'Finalize a sessão antes de remover a worktree.',
+};
+const WORKTREE_ERROR_FALLBACK = 'O git não conseguiu remover a worktree.';
 
 const CONTEXT_READ_ERROR = 'Não foi possível ler as regras e o plano.';
 const CONTEXT_SAVE_ERROR = 'Não foi possível salvar as regras e o plano.';
@@ -204,6 +227,19 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
         conversations: {
           ...state.conversations,
           [message.id]: { entries: message.entries, usage: message.usage },
+        },
+      };
+    case 'session.worktree.result':
+      return {
+        ...state,
+        worktrees: {
+          ...state.worktrees,
+          [message.id]: {
+            status: message.status,
+            removing: false,
+            branchDeleted: message.branchDeleted,
+            error: null,
+          },
         },
       };
     case 'session.search.result':
@@ -326,6 +362,17 @@ function requestFailed(state: SessionsState, code: ErrorCode, ref?: string): Ses
           ? CONTEXT_READ_ERROR
           : CONTEXT_SAVE_ERROR;
     return { ...state, contextEditor: { ...editor, saving: false, error } };
+  }
+  const worktree = ref === undefined ? undefined : state.worktrees[ref];
+  // Only while a worktree request is pending: other requests share the id.
+  if (ref !== undefined && worktree !== undefined && (worktree.removing || worktree.status === null)) {
+    return {
+      ...state,
+      worktrees: {
+        ...state.worktrees,
+        [ref]: { ...worktree, removing: false, error: WORKTREE_ERROR_MESSAGES[code] ?? WORKTREE_ERROR_FALLBACK },
+      },
+    };
   }
   if (ref !== undefined && ref === state.resumingId) {
     return {

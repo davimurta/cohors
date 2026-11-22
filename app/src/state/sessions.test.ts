@@ -24,6 +24,7 @@ function meta(id: string): SessionMeta {
     sshKey: null,
     contextDir: null,
     attention: null,
+    worktree: null,
     notes: '',
     summaryStatus: 'none',
   };
@@ -376,5 +377,48 @@ describe('restored layout', () => {
     );
     expect(state.selectedId).toBe('a');
     expect(state.panes).toEqual(['a']);
+  });
+});
+
+describe('worktrees', () => {
+  const status = { exists: true, changes: 2, commits: 0 };
+
+  it('shows a removal error only while a request is pending', () => {
+    const pending = {
+      ...withSessions(['a']),
+      worktrees: { a: { status, removing: true, branchDeleted: null, error: null } },
+    };
+    const failed = applyServerMessage(pending, {
+      type: 'error',
+      code: 'worktree_dirty',
+      message: 'dirty',
+      ref: 'a',
+    });
+    expect(failed.worktrees['a']?.removing).toBe(false);
+    expect(failed.worktrees['a']?.error).toMatch(/mudanças sem commit/);
+
+    const idle = { ...pending, worktrees: { a: { ...pending.worktrees.a, removing: false } } };
+    const ignored = applyServerMessage(idle, {
+      type: 'error',
+      code: 'bad_request',
+      message: 'empty name',
+      ref: 'a',
+    });
+    expect(ignored.worktrees['a']?.error).toBeNull();
+  });
+
+  it('records the result of a removal', () => {
+    const state = applyServerMessage(withSessions(['a']), {
+      type: 'session.worktree.result',
+      id: 'a',
+      status: { exists: false, changes: 0, commits: 0 },
+      branchDeleted: true,
+    });
+    expect(state.worktrees['a']).toEqual({
+      status: { exists: false, changes: 0, commits: 0 },
+      removing: false,
+      branchDeleted: true,
+      error: null,
+    });
   });
 });

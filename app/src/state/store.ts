@@ -28,6 +28,7 @@ export interface CreateSessionRequest {
   cwd: string;
   name: string;
   projectId: string | null;
+  worktree: boolean;
 }
 
 interface SessionsActions {
@@ -59,6 +60,8 @@ interface SessionsActions {
   renameSession: (id: string, name: string) => void;
   openTranscript: (id: string) => void;
   loadConversation: (id: string) => void;
+  loadWorktree: (id: string) => void;
+  removeWorktree: (id: string) => void;
   /** Runs right away; the search box debounces. */
   searchHistory: (query: string) => void;
   closeTranscript: () => void;
@@ -92,7 +95,7 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   openNewSession: (projectId) =>
     set({ newSessionOpen: true, newSessionProjectId: projectId ?? null, createError: null }),
   closeNewSession: () => set({ newSessionOpen: false, creating: false, createError: null }),
-  createSession: ({ agent, cwd, name, projectId }) => {
+  createSession: ({ agent, cwd, name, projectId, worktree }) => {
     if (get().connection !== 'ready') {
       set({ createError: 'O daemon está desconectado.' });
       return;
@@ -104,6 +107,7 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
       cwd,
       name,
       ...(projectId === null ? {} : { projectId }),
+      ...(worktree ? { worktree } : {}),
     });
   },
   resumeSession: (id) => {
@@ -158,6 +162,23 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   closeTranscript: () => set({ transcript: null }),
   loadConversation: (id) => {
     if (!(id in get().conversations)) daemon.send({ type: 'session.conversation', id });
+  },
+  loadWorktree: (id) => {
+    set((state) => ({
+      worktrees: {
+        ...state.worktrees,
+        [id]: state.worktrees[id] ?? { status: null, removing: false, branchDeleted: null, error: null },
+      },
+    }));
+    daemon.send({ type: 'session.worktree.status', id });
+  },
+  removeWorktree: (id) => {
+    const current = get().worktrees[id];
+    if (current === undefined || current.removing) return;
+    set((state) => ({
+      worktrees: { ...state.worktrees, [id]: { ...current, removing: true, error: null } },
+    }));
+    daemon.send({ type: 'session.worktree.remove', id });
   },
   searchHistory: (query) => {
     if (query.trim() === '') {
