@@ -26,6 +26,7 @@ The daemon answers `ready` with its versions and whether `claude` is in its PATH
 | `session.skipSummary {id}` | Cancels a pending summary or gives up on a failed one; `summaryStatus` becomes `none` |
 | `session.getSummary {id}` | Replies `session.summary` with the saved text |
 | `session.notes {id, notes}` | Saves the notes; every client receives `session.updated` |
+| `session.rename {id, name}` | Renames any session, finished ones included. The name is trimmed; a blank one is `bad_request`. Every client receives `session.updated` |
 | `session.transcript {id}` | Replies `session.transcript.result {id, data, truncated}` with the last 2 MB of output |
 | `session.delete {id}` | Deletes a finished session's folder; every client receives `session.deleted {id}` |
 | `session.attach {id}` | Replies `session.snapshot {id, seq, data}`, then streams `session.output {id, seq, data}` |

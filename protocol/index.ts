@@ -89,6 +89,7 @@ export type ClientMessage =
   | { type: 'session.skipSummary'; id: string }
   | { type: 'session.getSummary'; id: string }
   | { type: 'session.notes'; id: string; notes: string }
+  | { type: 'session.rename'; id: string; name: string }
   | { type: 'session.transcript'; id: string }
   | { type: 'session.delete'; id: string }
   | { type: 'daemon.shutdown' }

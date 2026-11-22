@@ -47,6 +47,8 @@ pub enum SessionsError {
     Io(#[from] std::io::Error),
     #[error("failed to format timestamp: {0}")]
     Timestamp(#[from] time::error::Format),
+    #[error("session name is empty")]
+    EmptyName,
     #[error("session registry lock poisoned")]
     Poisoned,
 }
@@ -58,6 +60,7 @@ impl SessionsError {
             Self::AgentNotFound => ErrorCode::AgentNotFound,
             Self::NotFound => ErrorCode::SessionNotFound,
             Self::InvalidState(_) => ErrorCode::InvalidState,
+            Self::EmptyName => ErrorCode::BadRequest,
             _ => ErrorCode::Internal,
         }
     }
@@ -374,6 +377,18 @@ impl Sessions {
     pub fn set_notes(&self, id: &str, notes: String) -> Result<SessionMeta, SessionsError> {
         self.update(id, |meta| {
             meta.notes = notes;
+            Ok(())
+        })
+    }
+
+    /// Any session can be renamed, finished ones included.
+    pub fn rename(&self, id: &str, name: &str) -> Result<SessionMeta, SessionsError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(SessionsError::EmptyName);
+        }
+        self.update(id, |meta| {
+            meta.name = name.to_owned();
             Ok(())
         })
     }
@@ -772,6 +787,27 @@ mod tests {
         let a = reloaded.iter().find(|meta| meta.id == "a").expect("a");
         assert_eq!(a.status, SessionStatus::Interrupted);
         assert!(a.ended_at.is_some());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_trims_and_rejects_blank_names() {
+        let root = temp_root();
+        let store = SessionStore::new(root.clone());
+        store.save(&meta("a")).expect("save");
+        let sessions = load(&root);
+        let renamed = sessions.rename("a", "  api login ").expect("rename");
+        assert_eq!(renamed.name, "api login");
+        assert!(matches!(
+            sessions.rename("a", "   "),
+            Err(SessionsError::EmptyName)
+        ));
+        assert!(matches!(
+            sessions.rename("missing", "x"),
+            Err(SessionsError::NotFound)
+        ));
+        let reloaded = SessionStore::new(root.clone()).load_all();
+        assert_eq!(reloaded[0].name, "api login");
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 

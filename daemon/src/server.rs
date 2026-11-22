@@ -277,6 +277,11 @@ async fn handle_message(
             .set_notes(&id, notes)
             .err()
             .map(|error| request_error(error.code(), &error, &id)),
+        ClientMessage::SessionRename { id, name } => state
+            .sessions
+            .rename(&id, &name)
+            .err()
+            .map(|error| request_error(error.code(), &error, &id)),
         ClientMessage::SessionTranscript { id } => Some(
             state
                 .sessions

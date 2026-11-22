@@ -54,6 +54,8 @@ pub enum ClientMessage {
     SessionGetSummary { id: String },
     #[serde(rename = "session.notes")]
     SessionNotes { id: String, notes: String },
+    #[serde(rename = "session.rename")]
+    SessionRename { id: String, name: String },
     #[serde(rename = "session.transcript")]
     SessionTranscript { id: String },
     /// Only finished sessions can be deleted.
