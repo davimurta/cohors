@@ -21,3 +21,4 @@ pub mod summary;
 pub mod terminal_modes;
 pub mod transcript;
 pub mod utf8;
+pub mod worktree;

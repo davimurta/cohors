@@ -3,6 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use crate::conversation::{Entry as ConversationEntry, Usage as TokenUsage};
+pub use crate::worktree::{Worktree, WorktreeStatus};
 
 pub const PROTOCOL_VERSION: u32 = 2;
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,6 +32,9 @@ pub enum ClientMessage {
         cwd: String,
         name: Option<String>,
         project_id: Option<String>,
+        /// Isolates the session in a new git worktree of the folder's repository.
+        #[serde(default)]
+        worktree: bool,
     },
     #[serde(rename = "session.attach")]
     SessionAttach { id: String },
@@ -62,6 +66,10 @@ pub enum ClientMessage {
     SessionConversation { id: String },
     #[serde(rename = "session.search")]
     SessionSearch { query: String },
+    #[serde(rename = "session.worktree.status")]
+    SessionWorktreeStatus { id: String },
+    #[serde(rename = "session.worktree.remove")]
+    SessionWorktreeRemove { id: String },
     #[serde(rename = "session.transcript")]
     SessionTranscript { id: String },
     /// Only finished sessions can be deleted.
@@ -202,6 +210,9 @@ pub struct SessionMeta {
     /// Set while a live Claude session waits for the user.
     #[serde(default)]
     pub attention: Option<Attention>,
+    /// The git worktree the session works in, when it was isolated in one.
+    #[serde(default)]
+    pub worktree: Option<Worktree>,
     #[serde(default)]
     pub notes: String,
     #[serde(default)]
@@ -226,6 +237,10 @@ pub enum ErrorCode {
     InvalidCwd,
     AgentNotFound,
     InvalidState,
+    NotARepository,
+    NoCommits,
+    WorktreeDirty,
+    GitFailed,
     Internal,
 }
 
@@ -272,6 +287,14 @@ pub enum ServerMessage {
     /// Finished sessions that match `query`; empty for a blank query.
     #[serde(rename = "session.search.result")]
     SessionSearchResult { query: String, ids: Vec<String> },
+    /// Reply to `session.worktree.status` and `session.worktree.remove`.
+    /// `branchDeleted` is only set after a removal.
+    #[serde(rename = "session.worktree.result")]
+    SessionWorktreeResult {
+        id: String,
+        status: WorktreeStatus,
+        branch_deleted: Option<bool>,
+    },
     #[serde(rename = "accounts.list.result")]
     AccountsListResult {
         claude_accounts: Vec<ClaudeAccount>,
@@ -355,7 +378,8 @@ mod tests {
                 agent: Agent::Shell,
                 cwd: "/tmp".into(),
                 name: None,
-                project_id: None
+                project_id: None,
+                worktree: false,
             }
         );
     }
@@ -378,6 +402,7 @@ mod tests {
             ssh_key: None,
             context_dir: None,
             attention: None,
+            worktree: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
@@ -403,6 +428,7 @@ mod tests {
                     "sshKey": null,
                     "contextDir": null,
                     "attention": null,
+                    "worktree": null,
                     "notes": "",
                     "summaryStatus": "none"
                 }

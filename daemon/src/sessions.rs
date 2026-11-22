@@ -19,6 +19,7 @@ use crate::protocol::{
 use crate::session::{Launch, Session, SessionError};
 use crate::store::SessionStore;
 use crate::summary;
+use crate::worktree::{Git, RemovedBranch, WorktreeError, WorktreeStatus};
 
 const CLAUDE_COMMAND: &str = "claude";
 const EVENT_QUEUE: usize = 256;
@@ -50,6 +51,10 @@ pub enum SessionsError {
     Timestamp(#[from] time::error::Format),
     #[error("session name is empty")]
     EmptyName,
+    #[error("session has no worktree")]
+    NoWorktree,
+    #[error(transparent)]
+    Worktree(#[from] WorktreeError),
     #[error("session registry lock poisoned")]
     Poisoned,
 }
@@ -61,7 +66,13 @@ impl SessionsError {
             Self::AgentNotFound => ErrorCode::AgentNotFound,
             Self::NotFound => ErrorCode::SessionNotFound,
             Self::InvalidState(_) => ErrorCode::InvalidState,
-            Self::EmptyName => ErrorCode::BadRequest,
+            Self::EmptyName | Self::NoWorktree => ErrorCode::BadRequest,
+            Self::Worktree(error) => match error {
+                WorktreeError::NotARepository(_) => ErrorCode::NotARepository,
+                WorktreeError::NoCommits => ErrorCode::NoCommits,
+                WorktreeError::Dirty => ErrorCode::WorktreeDirty,
+                _ => ErrorCode::GitFailed,
+            },
             _ => ErrorCode::Internal,
         }
     }
@@ -75,6 +86,8 @@ pub struct CreateRequest {
     pub project: Option<Project>,
     /// The project's context folder, already created.
     pub context_dir: Option<String>,
+    /// Start in a new git worktree of the folder's repository.
+    pub worktree: bool,
 }
 
 pub struct SessionEntry {
@@ -88,6 +101,8 @@ pub struct Sessions {
     store: SessionStore,
     /// PATH used to find agents and given to every session process.
     path: OsString,
+    /// Where session worktrees are created.
+    worktrees_dir: PathBuf,
     events: broadcast::Sender<ServerMessage>,
     entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
     /// Lets process exit callbacks reach the registry without keeping it alive.
@@ -97,7 +112,7 @@ pub struct Sessions {
 impl Sessions {
     /// Loads saved sessions. Any that were running belonged to a daemon that
     /// is gone, so their processes are lost: they become interrupted.
-    pub fn load(store: SessionStore, path: OsString) -> Arc<Self> {
+    pub fn load(store: SessionStore, path: OsString, worktrees_dir: PathBuf) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let mut entries = HashMap::new();
         for mut meta in store.load_all() {
@@ -131,6 +146,7 @@ impl Sessions {
         Arc::new_cyclic(|this| Self {
             store,
             path,
+            worktrees_dir,
             events,
             entries: Mutex::new(entries),
             this: this.clone(),
@@ -159,17 +175,26 @@ impl Sessions {
     }
 
     pub fn create(&self, request: CreateRequest) -> Result<SessionMeta, SessionsError> {
-        let cwd = existing_dir(&request.cwd)?;
+        let chosen = existing_dir(&request.cwd)?;
         let agent_session_id = match request.agent {
             Agent::Claude => Some(Uuid::new_v4().to_string()),
             Agent::Shell => None,
         };
+        let id = Uuid::new_v4().to_string();
+        let name = session_name(request.name.as_deref(), &chosen);
+        let (worktree, cwd) = if request.worktree {
+            let git = Git::find(&self.path)?;
+            let (worktree, cwd) = git.create(&chosen, &self.worktrees_dir, &name, &id)?;
+            (Some(worktree), cwd)
+        } else {
+            (None, chosen)
+        };
         let project = request.project.as_ref();
         let meta = SessionMeta {
-            id: Uuid::new_v4().to_string(),
-            name: session_name(request.name.as_deref(), &cwd),
+            id,
+            name,
             agent: request.agent,
-            cwd: request.cwd,
+            cwd: cwd.display().to_string(),
             agent_session_id,
             status: SessionStatus::Running,
             exit_code: None,
@@ -181,20 +206,29 @@ impl Sessions {
             ssh_key: project.and_then(|project| project.ssh_key.clone()),
             context_dir: request.context_dir,
             attention: None,
+            worktree,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
-        let launch = launch_for(&self.path, &meta, &cwd, false)?;
-        let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
-        let started = session
-            .start(&launch, self.exit_handler(&meta.id))
-            .map_err(SessionsError::from)
-            .and_then(|()| self.store.save(&meta).map_err(SessionsError::from));
-        if let Err(error) = started {
-            // Nothing should remain of a session that never started.
-            let _ = self.store.remove(&meta.id);
-            return Err(error);
-        }
+        let started = launch_for(&self.path, &meta, &cwd, false).and_then(|launch| {
+            let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
+            session.start(&launch, self.exit_handler(&meta.id))?;
+            self.store.save(&meta)?;
+            Ok(session)
+        });
+        let session = match started {
+            Ok(session) => session,
+            Err(error) => {
+                // Nothing should remain of a session that never started.
+                let _ = self.store.remove(&meta.id);
+                if let Some(worktree) = &meta.worktree
+                    && let Ok(git) = Git::find(&self.path)
+                {
+                    let _ = git.remove(worktree);
+                }
+                return Err(error);
+            }
+        };
         let entry = Arc::new(SessionEntry {
             meta: Mutex::new(meta.clone()),
             session,
@@ -437,6 +471,29 @@ impl Sessions {
             })
             .map(|meta| meta.id)
             .collect()
+    }
+
+    pub fn worktree_status(&self, id: &str) -> Result<WorktreeStatus, SessionsError> {
+        let worktree = self.worktree_of(id)?;
+        Ok(Git::find(&self.path)?.status(&worktree)?)
+    }
+
+    /// Removes the worktree of a session that no longer runs, if it has no
+    /// uncommitted changes. The session keeps the record of it.
+    pub fn remove_worktree(&self, id: &str) -> Result<RemovedBranch, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let meta = lock(&entry.meta)?.clone();
+        if meta.status.is_live() {
+            return Err(SessionsError::InvalidState(meta.status));
+        }
+        let worktree = meta.worktree.ok_or(SessionsError::NoWorktree)?;
+        Ok(Git::find(&self.path)?.remove(&worktree)?)
+    }
+
+    fn worktree_of(&self, id: &str) -> Result<crate::worktree::Worktree, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let worktree = lock(&entry.meta)?.worktree.clone();
+        worktree.ok_or(SessionsError::NoWorktree)
     }
 
     pub fn transcript(&self, id: &str) -> Result<ServerMessage, SessionsError> {
@@ -765,6 +822,7 @@ mod tests {
         Sessions::load(
             SessionStore::new(root.to_path_buf()),
             std::env::var_os("PATH").unwrap_or_default(),
+            root.join("worktrees"),
         )
     }
 
@@ -776,6 +834,7 @@ mod tests {
             name: Some(name.into()),
             project: None,
             context_dir: None,
+            worktree: false,
         }
     }
 
@@ -898,6 +957,7 @@ mod tests {
             ssh_key: None,
             context_dir: None,
             attention: None,
+            worktree: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }
@@ -957,6 +1017,7 @@ mod tests {
         let sessions = Sessions::load(
             SessionStore::new(root.join("sessions")),
             bin.into_os_string(),
+            root.join("worktrees"),
         );
         let meta = sessions
             .create(CreateRequest {
@@ -965,6 +1026,7 @@ mod tests {
                 name: None,
                 project: None,
                 context_dir: None,
+                worktree: false,
             })
             .expect("create");
         (sessions, meta)
@@ -1059,7 +1121,7 @@ mod tests {
             })
             .expect("save");
 
-        let sessions = Sessions::load(store, OsString::new());
+        let sessions = Sessions::load(store, OsString::new(), root.join("worktrees"));
         let mut billing = sessions.search(" BILLING ", &root);
         billing.sort();
         assert_eq!(billing, ["by-name", "by-notes", "by-summary"]);
@@ -1077,6 +1139,62 @@ mod tests {
         std::fs::remove_dir_all(root).expect("cleanup");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn worktree_session_runs_in_its_own_checkout() {
+        use std::process::Command;
+        let root = temp_root();
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).expect("repo");
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=Cohors",
+                    "-c",
+                    "user.email=cohors@example.com",
+                ])
+                .args(args)
+                .output()
+                .expect("git")
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("README.md"), "hi").expect("file");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+
+        let sessions = load(&root);
+        let meta = sessions
+            .create(CreateRequest {
+                worktree: true,
+                cwd: repo.display().to_string(),
+                ..shell_request("isolated")
+            })
+            .expect("create");
+        let worktree = meta.worktree.clone().expect("worktree");
+        assert_eq!(meta.cwd, worktree.path);
+        assert!(Path::new(&meta.cwd).join("README.md").is_file());
+        assert!(matches!(
+            sessions.remove_worktree(&meta.id),
+            Err(SessionsError::InvalidState(_))
+        ));
+
+        sessions.finish(&meta.id, false).expect("finish");
+        sessions.stop_process(&meta.id);
+        assert!(sessions.worktree_status(&meta.id).expect("status").exists);
+        assert_eq!(
+            sessions.remove_worktree(&meta.id).expect("remove"),
+            RemovedBranch::Deleted
+        );
+        assert!(!sessions.worktree_status(&meta.id).expect("status").exists);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn rejects_missing_folder() {
         let sessions = load(&temp_root());
@@ -1086,6 +1204,7 @@ mod tests {
             name: None,
             project: None,
             context_dir: None,
+            worktree: false,
         });
         assert!(matches!(result, Err(SessionsError::InvalidCwd(_))));
     }

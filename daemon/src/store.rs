@@ -121,6 +121,7 @@ mod tests {
             ssh_key: None,
             context_dir: None,
             attention: None,
+            worktree: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }

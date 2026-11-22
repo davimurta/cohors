@@ -16,6 +16,25 @@ export type SummaryStatus = 'none' | 'pending' | 'done' | 'failed';
 /** Why a Claude session waits for the user: it finished an answer, or it asks for input or a permission. */
 export type Attention = 'done' | 'input';
 
+/** Git worktree a session was isolated in. */
+export interface Worktree {
+  /** The main repository's top folder. */
+  repo: string;
+  path: string;
+  branch: string;
+  /** Commit the branch started from. */
+  base: string;
+}
+
+export interface WorktreeStatus {
+  /** False once the folder was removed. */
+  exists: boolean;
+  /** Uncommitted changes, untracked files included. */
+  changes: number;
+  /** Commits on the branch since it started. */
+  commits: number;
+}
+
 export interface SessionMeta {
   id: string;
   name: string;
@@ -37,6 +56,7 @@ export interface SessionMeta {
   contextDir: string | null;
   /** Set while a live Claude session waits for the user. */
   attention: Attention | null;
+  worktree: Worktree | null;
   notes: string;
   summaryStatus: SummaryStatus;
 }
@@ -96,12 +116,24 @@ export type ErrorCode =
   | 'invalid_cwd'
   | 'agent_not_found'
   | 'invalid_state'
+  | 'not_a_repository'
+  | 'no_commits'
+  | 'worktree_dirty'
+  | 'git_failed'
   | 'internal';
 
 export type ClientMessage =
   | { type: 'hello'; token: string; protocolVersion: number }
   | { type: 'session.list' }
-  | { type: 'session.create'; agent: Agent; cwd: string; name?: string; projectId?: string }
+  | {
+      type: 'session.create';
+      agent: Agent;
+      cwd: string;
+      name?: string;
+      projectId?: string;
+      /** Start in a new git worktree of the folder's repository. */
+      worktree?: boolean;
+    }
   | { type: 'session.attach'; id: string }
   | { type: 'session.resume'; id: string }
   | { type: 'session.detach'; id: string }
@@ -115,6 +147,8 @@ export type ClientMessage =
   | { type: 'session.rename'; id: string; name: string }
   | { type: 'session.conversation'; id: string }
   | { type: 'session.search'; query: string }
+  | { type: 'session.worktree.status'; id: string }
+  | { type: 'session.worktree.remove'; id: string }
   | { type: 'session.transcript'; id: string }
   | { type: 'session.delete'; id: string }
   | { type: 'daemon.shutdown' }
@@ -141,6 +175,13 @@ export type ServerMessage =
       usage: TokenUsage | null;
     }
   | { type: 'session.search.result'; query: string; ids: string[] }
+  | {
+      type: 'session.worktree.result';
+      id: string;
+      status: WorktreeStatus;
+      /** Set after a removal: false when the branch was kept for its commits. */
+      branchDeleted: boolean | null;
+    }
   | { type: 'accounts.list.result'; claudeAccounts: ClaudeAccount[]; sshKeys: SshKey[] }
   | { type: 'project.list.result'; projects: Project[] }
   | { type: 'project.context.result'; id: string; dir: string; rules: string; plan: string }

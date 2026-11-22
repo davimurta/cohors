@@ -22,8 +22,9 @@ use crate::protocol::SummaryStatus;
 use crate::protocol::{
     Agent, ClientMessage, DAEMON_VERSION, ErrorCode, PROTOCOL_VERSION, ServerMessage,
 };
-use crate::sessions::{CreateRequest, Sessions};
+use crate::sessions::{CreateRequest, Sessions, SessionsError};
 use crate::summary;
+use crate::worktree::RemovedBranch;
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const OUTGOING_QUEUE: usize = 256;
@@ -202,7 +203,23 @@ async fn handle_message(
             cwd,
             name,
             project_id,
-        } => create_session(state, agent, cwd, name, project_id),
+            worktree,
+        } => {
+            // Creating a worktree checks out files, which can take a while.
+            let task_state = Arc::clone(state);
+            let request = NewSession {
+                agent,
+                cwd,
+                name,
+                project_id,
+                worktree,
+            };
+            tokio::task::spawn_blocking(move || create_session(&task_state, request))
+                .await
+                .unwrap_or_else(|error| {
+                    Some(request_error(ErrorCode::Internal, &error, "session.create"))
+                })
+        }
         ClientMessage::SessionResume { id } => state
             .sessions
             .resume(&id)
@@ -318,6 +335,8 @@ async fn handle_message(
                 Err(error) => request_error(ErrorCode::Internal, &error, "session.search"),
             })
         }
+        ClientMessage::SessionWorktreeStatus { id } => Some(worktree_reply(state, id, false).await),
+        ClientMessage::SessionWorktreeRemove { id } => Some(worktree_reply(state, id, true).await),
         ClientMessage::SessionTranscript { id } => Some(
             state
                 .sessions
@@ -402,14 +421,23 @@ fn spawn_finish(state: &Arc<DaemonState>, id: String, stop: bool, summarize: boo
     }
 }
 
-fn create_session(
-    state: &DaemonState,
+struct NewSession {
     agent: Agent,
     cwd: String,
     name: Option<String>,
     project_id: Option<String>,
-) -> Option<ServerMessage> {
+    worktree: bool,
+}
+
+fn create_session(state: &DaemonState, request: NewSession) -> Option<ServerMessage> {
     const REFERENCE: &str = "session.create";
+    let NewSession {
+        agent,
+        cwd,
+        name,
+        project_id,
+        worktree,
+    } = request;
     let project = match project_id {
         Some(id) => match state.projects.get(&id) {
             Some(project) => Some(project),
@@ -436,12 +464,39 @@ fn create_session(
         name,
         project,
         context_dir,
+        worktree,
     };
     state
         .sessions
         .create(request)
         .err()
         .map(|error| request_error(error.code(), &error, REFERENCE))
+}
+
+/// Status of a session's worktree, after removing it when `remove` is set.
+async fn worktree_reply(state: &Arc<DaemonState>, id: String, remove: bool) -> ServerMessage {
+    let task_state = Arc::clone(state);
+    let task_id = id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let sessions = &task_state.sessions;
+        let removed = if remove {
+            Some(sessions.remove_worktree(&task_id)?)
+        } else {
+            None
+        };
+        let status = sessions.worktree_status(&task_id)?;
+        Ok::<_, SessionsError>((status, removed))
+    })
+    .await;
+    match result {
+        Ok(Ok((status, removed))) => ServerMessage::SessionWorktreeResult {
+            id,
+            status,
+            branch_deleted: removed.map(|branch| branch == RemovedBranch::Deleted),
+        },
+        Ok(Err(error)) => request_error(error.code(), &error, &id),
+        Err(error) => request_error(ErrorCode::Internal, &error, &id),
+    }
 }
 
 fn context_result(id: String, dir: &Path, files: ContextFiles) -> ServerMessage {
