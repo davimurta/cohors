@@ -11,15 +11,21 @@ use cohors_daemon::projects::Projects;
 use cohors_daemon::server::{self, DaemonState};
 use cohors_daemon::sessions::Sessions;
 use cohors_daemon::store::SessionStore;
-use cohors_daemon::{control, instance, login_path};
+use cohors_daemon::{context, control, instance, login_path};
 use tokio::net::TcpListener;
 
-const USAGE: &str = "usage: cohors-daemon [--detach | --stop]";
+const USAGE: &str = "usage: cohors-daemon [--detach | --stop | --print-context <dir>]";
 /// How often sessions are checked for idleness.
 const IDLE_CHECK: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, dir] = args.as_slice()
+        && flag == context::PRINT_FLAG
+    {
+        context::print(Path::new(dir));
+        return ExitCode::SUCCESS;
+    }
     let result = data_dir().and_then(|dir| match args.as_slice() {
         [] => run(&dir),
         [flag] if flag == "--detach" => control::detach(&dir),
