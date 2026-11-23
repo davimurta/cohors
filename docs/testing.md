@@ -9,6 +9,7 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Opening the app from the system launcher (not a terminal) still finds `claude` (the empty state shows no "Claude Code não encontrado" note).
 - [ ] "Encerrar tudo" interrupts every session and the app comes back with them as Interrompida.
 - [ ] Killing the daemon process shows the error screen; "Tentar de novo" and "Reiniciar daemon" recover.
+- [ ] After rebuilding or updating the app while the old daemon keeps running, a banner offers "Reiniciar daemon"; "Agora não" hides it until the next outdated daemon, and restarting brings the sessions back as Interrompida.
 
 ## Sessions
 
