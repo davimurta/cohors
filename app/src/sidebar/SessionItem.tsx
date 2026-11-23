@@ -4,6 +4,7 @@ import { StatusDot } from '../components/StatusDot.tsx';
 import { AGENT_LABEL, displayPath, formatDuration, formatSpan } from '../session/format.ts';
 import { isMac } from '../platform.ts';
 import { STATUS_LABEL, isLive } from '../session/status.ts';
+import { ATTENTION_LABEL } from '../app/attention.ts';
 import { useAppStore } from '../state/store.ts';
 import styles from './SessionItem.module.css';
 
@@ -17,6 +18,7 @@ interface SessionItemProps {
 
 export function SessionItem({ session, selected, home, now, onSelect }: SessionItemProps) {
   const toggleSplit = useAppStore((state) => state.toggleSplit);
+  const openRename = useAppStore((state) => state.openRename);
   const shown = useAppStore(
     (state) => state.panes.length > 1 && state.panes.includes(session.id),
   );
@@ -35,6 +37,7 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
       aria-current={selected}
       data-shown={shown}
       onClick={onClick}
+      onDoubleClick={() => openRename(session.id)}
     >
       <StatusDot status={session.status} />
       <span className={styles.text}>
@@ -46,9 +49,13 @@ export function SessionItem({ session, selected, home, now, onSelect }: SessionI
             : ''}
         </span>
       </span>
-      <span className={`${styles.status} ${styles[session.status]}`}>
-        {statusText(session, now)}
-      </span>
+      {session.attention === null ? (
+        <span className={`${styles.status} ${styles[session.status]}`}>
+          {statusText(session, now)}
+        </span>
+      ) : (
+        <span className={styles.attention}>{ATTENTION_LABEL}</span>
+      )}
     </button>
   );
 }

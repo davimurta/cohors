@@ -1,14 +1,19 @@
 import type {
+  Agent,
   ClaudeAccount,
+  ConversationEntry,
   ErrorCode,
   Project,
   ServerMessage,
   SessionMeta,
   SshKey,
+  TokenUsage,
+  WorktreeStatus,
 } from '@cohors/protocol';
 import type { ConnectionStatus } from '../daemon/client.ts';
 import { isLive } from '../session/status.ts';
-import { pruneLayout } from './layout.ts';
+import { EVEN_SPLIT, pruneLayout, type SplitSizes } from './layout.ts';
+import type { SavedLayout } from './persist.ts';
 
 export type SidebarTab = 'active' | 'finished';
 
@@ -19,23 +24,70 @@ export interface TranscriptView {
   truncated: boolean;
 }
 
+/** Claude conversation of a session; both null when Claude kept no log. */
+export interface Conversation {
+  entries: ConversationEntry[] | null;
+  usage: TokenUsage | null;
+}
+
+/** What the history knows about a session's worktree. */
+export interface WorktreeView {
+  /** null until the daemon answers. */
+  status: WorktreeStatus | null;
+  removing: boolean;
+  /** After a removal: whether the branch went too. */
+  branchDeleted: boolean | null;
+  error: string | null;
+}
+
+export interface HistorySearch {
+  query: string;
+  /** Matching finished sessions; null until the first answer arrives. */
+  ids: string[] | null;
+}
+
+export interface ContextEditor {
+  projectId: string;
+  /** null until the daemon sends the files. */
+  files: { dir: string; rules: string; plan: string } | null;
+  saving: boolean;
+  error: string | null;
+}
+
 export interface SessionsState {
   connection: ConnectionStatus;
   /** Technical reason shown on the daemon error screens. */
   connectionDetail: string | null;
   /** Unknown until the daemon handshake completes. */
   claudeAvailable: boolean | null;
+  /** Agent commands the daemon found; null until the handshake. */
+  availableAgents: Agent[] | null;
+  /** Build of the running daemon, from the handshake. */
+  daemonBuildId: string | null;
+  /** The running daemon is another build than the one this app starts. */
+  daemonOutdated: boolean;
   sessions: SessionMeta[];
   /** The focused session; always one of `panes` when any is shown. */
   selectedId: string | null;
   /** Sessions shown together in the main area, in order. */
   panes: string[];
+  splitSizes: SplitSizes;
+  /** Layout saved by the last run, applied once the session list arrives. */
+  restoredLayout: SavedLayout | null;
   sidebarTab: SidebarTab;
   /** Summary text by session id, loaded when a finished session is opened. */
   summaries: Record<string, string | null>;
   transcript: TranscriptView | null;
+  /** Conversations by session id, loaded on demand. */
+  conversations: Record<string, Conversation>;
+  /** Worktrees by session id, loaded when the history shows one. */
+  worktrees: Record<string, WorktreeView>;
+  /** Search in the finished sessions; null when the box is empty. */
+  historySearch: HistorySearch | null;
   /** Session whose notes dialog is open. */
   notesId: string | null;
+  /** Session whose rename dialog is open. */
+  renameId: string | null;
   projects: Project[];
   claudeAccounts: ClaudeAccount[];
   sshKeys: SshKey[];
@@ -51,19 +103,30 @@ export interface SessionsState {
   projectDialog: { projectId: string | null } | null;
   savingProject: boolean;
   projectError: string | null;
+  /** Open editor of a project's rules and plan. */
+  contextEditor: ContextEditor | null;
 }
 
 export const initialSessionsState: SessionsState = {
   connection: 'connecting',
   connectionDetail: null,
   claudeAvailable: null,
+  availableAgents: null,
+  daemonBuildId: null,
+  daemonOutdated: false,
   sessions: [],
   selectedId: null,
   panes: [],
+  splitSizes: EVEN_SPLIT,
+  restoredLayout: null,
   sidebarTab: 'active',
   summaries: {},
   transcript: null,
+  conversations: {},
+  worktrees: {},
+  historySearch: null,
   notesId: null,
+  renameId: null,
   projects: [],
   claudeAccounts: [],
   sshKeys: [],
@@ -76,25 +139,39 @@ export const initialSessionsState: SessionsState = {
   projectDialog: null,
   savingProject: false,
   projectError: null,
+  contextEditor: null,
 };
 
 const CREATE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   invalid_cwd: 'Essa pasta não existe. Escolha outra.',
-  agent_not_found: 'Claude Code não encontrado. Instale o CLI ou escolha Shell.',
+  agent_not_found: 'Esse agente não foi encontrado neste computador. Instale o CLI ou escolha outro.',
+  not_a_repository: 'Essa pasta não está num repositório git. Desmarque a worktree ou escolha outra.',
+  no_commits: 'O repositório ainda não tem commits, então não dá para criar a worktree.',
+  git_failed: 'O git não conseguiu criar a worktree.',
 };
 const CREATE_ERROR_FALLBACK = 'Não foi possível criar a sessão.';
 
 const RESUME_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   invalid_cwd: 'A pasta desta sessão não existe mais.',
-  agent_not_found: 'Claude Code não encontrado. Instale o CLI para retomar esta sessão.',
+  agent_not_found: 'Esse agente não foi encontrado neste computador. Instale o CLI para retomar esta sessão.',
 };
 const RESUME_ERROR_FALLBACK = 'Não foi possível retomar a sessão.';
 
 const PROJECT_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
-  invalid_cwd: 'A pasta raiz não existe. Escolha outra.',
+  invalid_cwd: 'A pasta escolhida não existe. Escolha outra.',
   project_not_found: 'Este projeto não existe mais.',
 };
 const PROJECT_ERROR_FALLBACK = 'Não foi possível salvar o projeto.';
+
+const WORKTREE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  worktree_dirty: 'A worktree tem mudanças sem commit. Faça commit ou descarte antes de remover.',
+  invalid_state: 'Finalize a sessão antes de remover a worktree.',
+};
+const WORKTREE_ERROR_FALLBACK = 'O git não conseguiu remover a worktree.';
+
+const CONTEXT_READ_ERROR = 'Não foi possível ler as regras e o plano.';
+const CONTEXT_SAVE_ERROR = 'Não foi possível salvar as regras e o plano.';
+const PROJECT_GONE_ERROR = 'Este projeto não existe mais.';
 
 /** Applies a daemon message to the state. Pure, so it can be tested alone. */
 export function applyServerMessage(state: SessionsState, message: ServerMessage): SessionsState {
@@ -118,13 +195,34 @@ export function syncLayout(state: SessionsState): SessionsState {
 function reduce(state: SessionsState, message: ServerMessage): SessionsState {
   switch (message.type) {
     case 'ready':
-      return { ...state, claudeAvailable: message.claudeAvailable };
-    case 'session.list.result':
+      return {
+        ...state,
+        claudeAvailable: message.claudeAvailable,
+        availableAgents: message.availableAgents,
+        daemonBuildId: message.buildId,
+        daemonOutdated: false,
+      };
+    case 'session.list.result': {
+      const restored = state.restoredLayout;
+      if (restored === null) {
+        return {
+          ...state,
+          sessions: message.sessions,
+          selectedId: keepSelection(state.selectedId, message.sessions),
+        };
+      }
+      // Sessions that ended meanwhile leave the split in syncLayout.
+      const selectedId = keepSelection(restored.selectedId, message.sessions);
+      const selected = message.sessions.find((session) => session.id === selectedId);
       return {
         ...state,
         sessions: message.sessions,
-        selectedId: keepSelection(state.selectedId, message.sessions),
+        selectedId,
+        panes: selectedId === restored.selectedId ? restored.panes : [],
+        sidebarTab: selected === undefined ? restored.sidebarTab : tabOf(selected),
+        restoredLayout: null,
       };
+    }
     case 'session.created':
       return sessionCreated(state, message.session);
     case 'session.updated':
@@ -139,18 +237,59 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
         ...state,
         transcript: { id: message.id, data: message.data, truncated: message.truncated },
       };
-    case 'accounts.list.result':
-      return { ...state, claudeAccounts: message.claudeAccounts, sshKeys: message.sshKeys };
-    case 'project.list.result':
-      // A save this client asked for succeeded: close its dialog.
-      if (!state.savingProject) return { ...state, projects: message.projects };
+    case 'session.conversation.result':
       return {
         ...state,
-        projects: message.projects,
+        conversations: {
+          ...state.conversations,
+          [message.id]: { entries: message.entries, usage: message.usage },
+        },
+      };
+    case 'session.worktree.result':
+      return {
+        ...state,
+        worktrees: {
+          ...state.worktrees,
+          [message.id]: {
+            status: message.status,
+            removing: false,
+            branchDeleted: message.branchDeleted,
+            error: null,
+          },
+        },
+      };
+    case 'session.search.result':
+      // Answers to an older query are dropped.
+      if (state.historySearch?.query !== message.query) return state;
+      return { ...state, historySearch: { query: message.query, ids: message.ids } };
+    case 'accounts.list.result':
+      return { ...state, claudeAccounts: message.claudeAccounts, sshKeys: message.sshKeys };
+    case 'project.list.result': {
+      const projects = message.projects;
+      const editor = state.contextEditor;
+      const contextEditor =
+        editor !== null && projects.some((project) => project.id === editor.projectId)
+          ? editor
+          : null;
+      // A save this client asked for succeeded: close its dialog.
+      if (!state.savingProject) return { ...state, projects, contextEditor };
+      return {
+        ...state,
+        projects,
+        contextEditor,
         savingProject: false,
         projectDialog: null,
         projectError: null,
       };
+    }
+    case 'project.context.result': {
+      const editor = state.contextEditor;
+      if (editor?.projectId !== message.id) return state;
+      // A save went through: the editor closes.
+      if (editor.saving) return { ...state, contextEditor: null };
+      const { dir, rules, plan } = message;
+      return { ...state, contextEditor: { ...editor, files: { dir, rules, plan } } };
+    }
     case 'error':
       return requestFailed(state, message.code, message.ref);
     case 'session.snapshot':
@@ -173,21 +312,29 @@ export function applyConnectionStatus(
     creating: false,
     resumingId: null,
     savingProject: false,
+    contextEditor: null,
   };
 }
 
 function sessionDeleted(state: SessionsState, id: string): SessionsState {
   const sessions = state.sessions.filter((session) => session.id !== id);
   const { [id]: _removed, ...summaries } = state.summaries;
+  const { [id]: _conversation, ...conversations } = state.conversations;
   return {
     ...state,
     sessions,
     summaries,
+    conversations,
     selectedId:
       state.selectedId === id ? firstInTab(sessions, state.sidebarTab) : state.selectedId,
     transcript: state.transcript?.id === id ? null : state.transcript,
     notesId: state.notesId === id ? null : state.notesId,
+    renameId: state.renameId === id ? null : state.renameId,
   };
+}
+
+function tabOf(session: SessionMeta): SidebarTab {
+  return session.status === 'finished' ? 'finished' : 'active';
 }
 
 export function inTab(session: SessionMeta, tab: SidebarTab): boolean {
@@ -219,6 +366,28 @@ function requestFailed(state: SessionsState, code: ErrorCode, ref?: string): Ses
       ...state,
       savingProject: false,
       projectError: PROJECT_ERROR_MESSAGES[code] ?? PROJECT_ERROR_FALLBACK,
+    };
+  }
+  const editor = state.contextEditor;
+  if (editor !== null && ref === editor.projectId) {
+    const reading = editor.files === null;
+    const error =
+      code === 'project_not_found'
+        ? PROJECT_GONE_ERROR
+        : reading
+          ? CONTEXT_READ_ERROR
+          : CONTEXT_SAVE_ERROR;
+    return { ...state, contextEditor: { ...editor, saving: false, error } };
+  }
+  const worktree = ref === undefined ? undefined : state.worktrees[ref];
+  // Only while a worktree request is pending: other requests share the id.
+  if (ref !== undefined && worktree !== undefined && (worktree.removing || worktree.status === null)) {
+    return {
+      ...state,
+      worktrees: {
+        ...state.worktrees,
+        [ref]: { ...worktree, removing: false, error: WORKTREE_ERROR_MESSAGES[code] ?? WORKTREE_ERROR_FALLBACK },
+      },
     };
   }
   if (ref !== undefined && ref === state.resumingId) {

@@ -10,12 +10,15 @@ import {
   formatSpan,
   formatTime,
   formatTimeRange,
+  formatTokens,
 } from '../session/format.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
 import { useNow } from '../session/useNow.ts';
+import { RenameButton } from '../rename/RenameButton.tsx';
 import { useAppStore } from '../state/store.ts';
 import { CopyButton } from './CopyButton.tsx';
 import { SummaryText } from './SummaryText.tsx';
+import { WorktreeCard } from './WorktreeCard.tsx';
 import styles from './HistoryView.module.css';
 
 /** A finished session: summary, details and notes. */
@@ -33,6 +36,7 @@ export function HistoryView({ session }: { session: SessionMeta }) {
         <div className={styles.heading}>
           <div className={styles.titleRow}>
             <h1 className={styles.title}>{session.name}</h1>
+            <RenameButton session={session} />
             <StatusPill status={session.status} />
           </div>
           <span className={styles.meta}>
@@ -76,8 +80,12 @@ export function HistoryView({ session }: { session: SessionMeta }) {
               <dd>{formatTime(ended)}</dd>
               <dt>Duração</dt>
               <dd>{formatSpan(session.createdAt, ended)}</dd>
+              {session.agent === 'claude' && <UsageDetails sessionId={session.id} />}
             </dl>
           </section>
+          {session.worktree !== null && (
+            <WorktreeCard session={session} worktree={session.worktree} />
+          )}
           <NotesCard session={session} />
         </div>
       </div>
@@ -91,8 +99,37 @@ export function HistoryView({ session }: { session: SessionMeta }) {
       >
         O resumo, as notas e o transcript de {session.name} serão apagados. Isso não pode ser
         desfeito.
+        {session.worktree !== null &&
+          ' A worktree não é apagada: remova antes no card Worktree, se quiser.'}
       </ConfirmDialog>
     </main>
+  );
+}
+
+/** Tokens from Claude's log. Cache reads are counted apart: they cost far
+ * less than new input. */
+function UsageDetails({ sessionId }: { sessionId: string }) {
+  const usage = useAppStore((state) => state.conversations[sessionId]?.usage);
+  const loadConversation = useAppStore((state) => state.loadConversation);
+
+  useEffect(() => loadConversation(sessionId), [loadConversation, sessionId]);
+
+  if (usage === undefined || usage === null) return null;
+  return (
+    <>
+      {usage.models.length > 0 && (
+        <>
+          <dt>{usage.models.length === 1 ? 'Modelo' : 'Modelos'}</dt>
+          <dd>{usage.models.join(', ')}</dd>
+        </>
+      )}
+      <dt>Tokens de entrada</dt>
+      <dd>{formatTokens(usage.inputTokens + usage.cacheCreationTokens)}</dd>
+      <dt>Lidos do cache</dt>
+      <dd>{formatTokens(usage.cacheReadTokens)}</dd>
+      <dt>Tokens de saída</dt>
+      <dd>{formatTokens(usage.outputTokens)}</dd>
+    </>
   );
 }
 

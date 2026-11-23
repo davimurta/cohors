@@ -3,6 +3,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use crate::hooks::{self, Signal};
 use crate::private_fs;
 use crate::protocol::SessionMeta;
 use crate::transcript::{self, Transcript};
@@ -76,6 +77,18 @@ impl SessionStore {
             .ok()
     }
 
+    /// Takes the latest hook signal of a session, if any arrived.
+    pub fn take_signal(&self, id: &str) -> io::Result<Option<Signal>> {
+        let path = self.root.join(id).join(hooks::ATTENTION_FILE);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        fs::remove_file(&path)?;
+        Ok(Signal::parse(&text))
+    }
+
     pub fn remove(&self, id: &str) -> io::Result<()> {
         fs::remove_dir_all(self.root.join(id))
     }
@@ -106,6 +119,9 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
+            attention: None,
+            worktree: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }
@@ -180,6 +196,18 @@ mod tests {
             .expect("write");
         assert_eq!(store.read_transcript("a", 100).expect("read"), b"onetwo");
         assert!(store.transcript_modified("a").is_some());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn hook_signals_are_taken_once() {
+        let (store, root) = temp_store();
+        let id = uuid::Uuid::new_v4().to_string();
+        store.save(&meta(&id)).expect("save");
+        assert_eq!(store.take_signal(&id).expect("none"), None);
+        hooks::write_signal(&root, &id, Signal::Clear).expect("write");
+        assert_eq!(store.take_signal(&id).expect("take"), Some(Signal::Clear));
+        assert_eq!(store.take_signal(&id).expect("taken"), None);
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

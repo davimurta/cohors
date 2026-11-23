@@ -1,8 +1,12 @@
 pub mod accounts;
 pub mod auth;
+pub mod build_id;
+pub mod context;
 pub mod control;
+pub mod conversation;
 pub mod daemon_file;
 pub mod executable;
+pub mod hooks;
 pub mod instance;
 pub mod login_path;
 pub mod private_fs;
@@ -18,3 +22,4 @@ pub mod summary;
 pub mod terminal_modes;
 pub mod transcript;
 pub mod utf8;
+pub mod worktree;

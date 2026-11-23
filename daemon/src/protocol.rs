@@ -2,7 +2,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub use crate::conversation::{Entry as ConversationEntry, Usage as TokenUsage};
+pub use crate::worktree::{Worktree, WorktreeStatus};
+
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Client token. Debug output is redacted so it can never reach logs.
@@ -29,6 +32,9 @@ pub enum ClientMessage {
         cwd: String,
         name: Option<String>,
         project_id: Option<String>,
+        /// Isolates the session in a new git worktree of the folder's repository.
+        #[serde(default)]
+        worktree: bool,
     },
     #[serde(rename = "session.attach")]
     SessionAttach { id: String },
@@ -54,6 +60,16 @@ pub enum ClientMessage {
     SessionGetSummary { id: String },
     #[serde(rename = "session.notes")]
     SessionNotes { id: String, notes: String },
+    #[serde(rename = "session.rename")]
+    SessionRename { id: String, name: String },
+    #[serde(rename = "session.conversation")]
+    SessionConversation { id: String },
+    #[serde(rename = "session.search")]
+    SessionSearch { query: String },
+    #[serde(rename = "session.worktree.status")]
+    SessionWorktreeStatus { id: String },
+    #[serde(rename = "session.worktree.remove")]
+    SessionWorktreeRemove { id: String },
     #[serde(rename = "session.transcript")]
     SessionTranscript { id: String },
     /// Only finished sessions can be deleted.
@@ -74,6 +90,14 @@ pub enum ClientMessage {
     },
     #[serde(rename = "project.delete")]
     ProjectDelete { id: String },
+    #[serde(rename = "project.context.get")]
+    ProjectContextGet { id: String },
+    #[serde(rename = "project.context.save")]
+    ProjectContextSave {
+        id: String,
+        rules: String,
+        plan: String,
+    },
 }
 
 /// Editable part of a project.
@@ -86,6 +110,9 @@ pub struct ProjectSettings {
     pub claude_config_dir: Option<String>,
     /// Private key path for `GIT_SSH_COMMAND`; None keeps the system SSH setup.
     pub ssh_key: Option<String>,
+    /// Folder with the rules and plan files; None keeps them in Cohors data.
+    #[serde(default)]
+    pub context_dir: Option<String>,
 }
 
 /// Also the on-disk format of `projects.json` entries.
@@ -97,6 +124,8 @@ pub struct Project {
     pub root: String,
     pub claude_config_dir: Option<String>,
     pub ssh_key: Option<String>,
+    #[serde(default)]
+    pub context_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -118,7 +147,26 @@ pub struct SshKey {
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
     Claude,
+    /// OpenAI Codex CLI.
+    Codex,
+    /// Google Gemini CLI.
+    Gemini,
     Shell,
+}
+
+impl Agent {
+    /// The agents Cohors starts as their own program, in display order.
+    pub const PROGRAMS: [Self; 3] = [Self::Claude, Self::Codex, Self::Gemini];
+
+    /// Command looked up in PATH; None for a plain shell.
+    pub fn command(self) -> Option<&'static str> {
+        match self {
+            Self::Claude => Some("claude"),
+            Self::Codex => Some("codex"),
+            Self::Gemini => Some("gemini"),
+            Self::Shell => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -145,6 +193,16 @@ pub enum SummaryStatus {
     Failed,
 }
 
+/// Why a Claude session waits for the user.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Attention {
+    /// Claude finished its answer (`Stop`).
+    Done,
+    /// Claude asks for a permission or input (`Notification`).
+    Input,
+}
+
 /// Also the on-disk format of `meta.json`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -165,6 +223,15 @@ pub struct SessionMeta {
     pub project_id: Option<String>,
     pub claude_config_dir: Option<String>,
     pub ssh_key: Option<String>,
+    /// Project context folder that Claude reads on start and resume.
+    #[serde(default)]
+    pub context_dir: Option<String>,
+    /// Set while a live Claude session waits for the user.
+    #[serde(default)]
+    pub attention: Option<Attention>,
+    /// The git worktree the session works in, when it was isolated in one.
+    #[serde(default)]
+    pub worktree: Option<Worktree>,
     #[serde(default)]
     pub notes: String,
     #[serde(default)]
@@ -189,6 +256,10 @@ pub enum ErrorCode {
     InvalidCwd,
     AgentNotFound,
     InvalidState,
+    NotARepository,
+    NoCommits,
+    WorktreeDirty,
+    GitFailed,
     Internal,
 }
 
@@ -199,7 +270,11 @@ pub enum ServerMessage {
     Ready {
         protocol_version: u32,
         daemon_version: &'static str,
+        /// Hash of the daemon binary; see `build_id`.
+        build_id: &'static str,
         claude_available: bool,
+        /// Agents whose command is in the daemon's PATH.
+        available_agents: Vec<Agent>,
     },
     #[serde(rename = "session.list.result")]
     SessionListResult { sessions: Vec<SessionMeta> },
@@ -224,6 +299,25 @@ pub enum ServerMessage {
         /// True when older output was left out.
         truncated: bool,
     },
+    /// The Claude conversation of a session. Both null when there is none:
+    /// a shell, or a Claude session that never got a prompt.
+    #[serde(rename = "session.conversation.result")]
+    SessionConversationResult {
+        id: String,
+        entries: Option<Vec<ConversationEntry>>,
+        usage: Option<TokenUsage>,
+    },
+    /// Finished sessions that match `query`; empty for a blank query.
+    #[serde(rename = "session.search.result")]
+    SessionSearchResult { query: String, ids: Vec<String> },
+    /// Reply to `session.worktree.status` and `session.worktree.remove`.
+    /// `branchDeleted` is only set after a removal.
+    #[serde(rename = "session.worktree.result")]
+    SessionWorktreeResult {
+        id: String,
+        status: WorktreeStatus,
+        branch_deleted: Option<bool>,
+    },
     #[serde(rename = "accounts.list.result")]
     AccountsListResult {
         claude_accounts: Vec<ClaudeAccount>,
@@ -232,6 +326,15 @@ pub enum ServerMessage {
     /// Reply to `project.list`, and sent to every client after a change.
     #[serde(rename = "project.list.result")]
     ProjectListResult { projects: Vec<Project> },
+    /// Reply to `project.context.get` and `project.context.save`. `dir` is
+    /// where the files live, also when the project uses the default folder.
+    #[serde(rename = "project.context.result")]
+    ProjectContextResult {
+        id: String,
+        dir: String,
+        rules: String,
+        plan: String,
+    },
     #[serde(rename = "session.snapshot")]
     SessionSnapshot { id: String, seq: u64, data: String },
     #[serde(rename = "session.output")]
@@ -298,7 +401,8 @@ mod tests {
                 agent: Agent::Shell,
                 cwd: "/tmp".into(),
                 name: None,
-                project_id: None
+                project_id: None,
+                worktree: false,
             }
         );
     }
@@ -319,6 +423,9 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
+            attention: None,
+            worktree: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
@@ -342,6 +449,9 @@ mod tests {
                     "projectId": null,
                     "claudeConfigDir": null,
                     "sshKey": null,
+                    "contextDir": null,
+                    "attention": null,
+                    "worktree": null,
                     "notes": "",
                     "summaryStatus": "none"
                 }
@@ -379,7 +489,9 @@ mod tests {
         let value = serde_json::to_value(ServerMessage::Ready {
             protocol_version: 1,
             daemon_version: "0.1.0",
+            build_id: "cbf29ce484222325",
             claude_available: true,
+            available_agents: vec![Agent::Claude, Agent::Gemini],
         })
         .expect("serialize");
         assert_eq!(
@@ -388,7 +500,9 @@ mod tests {
                 "type": "ready",
                 "protocolVersion": 1,
                 "daemonVersion": "0.1.0",
-                "claudeAvailable": true
+                "buildId": "cbf29ce484222325",
+                "claudeAvailable": true,
+                "availableAgents": ["claude", "gemini"]
             })
         );
     }

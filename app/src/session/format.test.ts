@@ -7,6 +7,7 @@ import {
   formatLastActivity,
   formatSpan,
   formatTimeRange,
+  formatTokens,
 } from './format.ts';
 
 const start = '2026-01-01T00:00:00Z';
@@ -91,5 +92,14 @@ describe('displayPath', () => {
 
   it('handles windows separators', () => {
     expect(displayPath('C:\\Users\\me\\dev', 'C:\\Users\\me')).toBe('~\\dev');
+  });
+});
+
+describe('formatTokens', () => {
+  it('shortens large counts the Brazilian way', () => {
+    expect(formatTokens(950)).toBe('950');
+    // Intl puts a no-break space before the unit.
+    expect(formatTokens(12_345)).toBe('12,3\u00a0mil');
+    expect(formatTokens(1_200_000)).toBe('1,2\u00a0mi');
   });
 });

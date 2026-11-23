@@ -1,0 +1,52 @@
+.divider {
+  position: relative;
+  border-radius: 4px;
+  touch-action: none;
+}
+
+.divider[data-orientation='vertical'] {
+  cursor: col-resize;
+}
+
+.divider[data-orientation='horizontal'] {
+  cursor: row-resize;
+}
+
+/* A thin line in the middle of the gap shows on hover, drag and focus. */
+.divider::after {
+  content: '';
+  position: absolute;
+  border-radius: 2px;
+  background: transparent;
+  transition: background-color 120ms;
+}
+
+.divider[data-orientation='vertical']::after {
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+}
+
+.divider[data-orientation='horizontal']::after {
+  left: 0;
+  right: 0;
+  top: 5px;
+  height: 2px;
+}
+
+.divider:hover::after,
+.divider:active::after,
+.divider:focus-visible::after {
+  background: var(--color-accent);
+}
+
+.divider:focus-visible {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .divider::after {
+    transition: none;
+  }
+}

@@ -11,15 +11,38 @@ use cohors_daemon::projects::Projects;
 use cohors_daemon::server::{self, DaemonState};
 use cohors_daemon::sessions::Sessions;
 use cohors_daemon::store::SessionStore;
-use cohors_daemon::{control, instance, login_path};
+use cohors_daemon::{build_id, context, control, hooks, instance, login_path};
 use tokio::net::TcpListener;
 
-const USAGE: &str = "usage: cohors-daemon [--detach | --stop]";
-/// How often sessions are checked for idleness.
+const USAGE: &str = "usage: cohors-daemon [--detach | --stop | --build-id | --print-context <dir> | --attention <state>]";
+const SESSIONS_DIR: &str = "sessions";
+const WORKTREES_DIR: &str = "worktrees";
+/// How often sessions are checked for idleness and hook signals.
 const IDLE_CHECK: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [flag, dir] = args.as_slice()
+        && flag == context::PRINT_FLAG
+    {
+        context::print(Path::new(dir));
+        return ExitCode::SUCCESS;
+    }
+    if let [flag] = args.as_slice()
+        && flag == build_id::FLAG
+    {
+        println!("{}", build_id::current());
+        return ExitCode::SUCCESS;
+    }
+    if let [flag, state] = args.as_slice()
+        && flag == hooks::ATTENTION_FLAG
+    {
+        hooks::report(
+            daemon_file::data_dir().map(|dir| dir.join(SESSIONS_DIR)),
+            state,
+        );
+        return ExitCode::SUCCESS;
+    }
     let result = data_dir().and_then(|dir| match args.as_slice() {
         [] => run(&dir),
         [flag] if flag == "--detach" => control::detach(&dir),
@@ -52,8 +75,15 @@ fn run(data_dir: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
+    // Hashed before clients connect, so the first handshake does not wait.
+    let build = build_id::current();
+    eprintln!("build {build}");
     let path = login_path::resolve(std::env::var_os("PATH")).await;
-    let sessions = Sessions::load(SessionStore::new(data_dir.join("sessions")), path);
+    let sessions = Sessions::load(
+        SessionStore::new(data_dir.join(SESSIONS_DIR)),
+        path,
+        data_dir.join(WORKTREES_DIR),
+    );
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let port = listener.local_addr()?.port();
     let token = generate_token()?;
@@ -73,6 +103,7 @@ async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
         loop {
             ticks.tick().await;
             idle_sessions.refresh_idle(Instant::now());
+            idle_sessions.refresh_attention();
         }
     });
 

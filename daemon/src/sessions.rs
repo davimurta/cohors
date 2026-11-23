@@ -10,15 +10,17 @@ use time::format_description::well_known::Rfc3339;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::conversation::{self, Conversation};
 use crate::executable;
+use crate::hooks::{self, Signal};
 use crate::protocol::{
     Agent, ErrorCode, Project, ServerMessage, SessionMeta, SessionStatus, SummaryStatus,
 };
 use crate::session::{Launch, Session, SessionError};
 use crate::store::SessionStore;
 use crate::summary;
+use crate::worktree::{Git, RemovedBranch, WorktreeError, WorktreeStatus};
 
-const CLAUDE_COMMAND: &str = "claude";
 const EVENT_QUEUE: usize = 256;
 const RESUME_SEPARATOR: &str = "\r\n\x1b[2m--- sessão retomada ---\x1b[0m\r\n";
 /// How long processes get to exit on their own before a hard kill.
@@ -34,8 +36,8 @@ const TRANSCRIPT_VIEW_BYTES: u64 = 2 * 1024 * 1024;
 pub enum SessionsError {
     #[error("folder does not exist: {0}")]
     InvalidCwd(String),
-    #[error("claude was not found in PATH")]
-    AgentNotFound,
+    #[error("{0} was not found in PATH")]
+    AgentNotFound(&'static str),
     #[error("session not found")]
     NotFound,
     #[error("session is {0:?}")]
@@ -46,6 +48,12 @@ pub enum SessionsError {
     Io(#[from] std::io::Error),
     #[error("failed to format timestamp: {0}")]
     Timestamp(#[from] time::error::Format),
+    #[error("session name is empty")]
+    EmptyName,
+    #[error("session has no worktree")]
+    NoWorktree,
+    #[error(transparent)]
+    Worktree(#[from] WorktreeError),
     #[error("session registry lock poisoned")]
     Poisoned,
 }
@@ -54,9 +62,16 @@ impl SessionsError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidCwd(_) => ErrorCode::InvalidCwd,
-            Self::AgentNotFound => ErrorCode::AgentNotFound,
+            Self::AgentNotFound(_) => ErrorCode::AgentNotFound,
             Self::NotFound => ErrorCode::SessionNotFound,
             Self::InvalidState(_) => ErrorCode::InvalidState,
+            Self::EmptyName | Self::NoWorktree => ErrorCode::BadRequest,
+            Self::Worktree(error) => match error {
+                WorktreeError::NotARepository(_) => ErrorCode::NotARepository,
+                WorktreeError::NoCommits => ErrorCode::NoCommits,
+                WorktreeError::Dirty => ErrorCode::WorktreeDirty,
+                _ => ErrorCode::GitFailed,
+            },
             _ => ErrorCode::Internal,
         }
     }
@@ -68,6 +83,10 @@ pub struct CreateRequest {
     pub name: Option<String>,
     /// The session takes the project's Claude account and SSH key.
     pub project: Option<Project>,
+    /// The project's context folder, already created.
+    pub context_dir: Option<String>,
+    /// Start in a new git worktree of the folder's repository.
+    pub worktree: bool,
 }
 
 pub struct SessionEntry {
@@ -81,6 +100,8 @@ pub struct Sessions {
     store: SessionStore,
     /// PATH used to find agents and given to every session process.
     path: OsString,
+    /// Where session worktrees are created.
+    worktrees_dir: PathBuf,
     events: broadcast::Sender<ServerMessage>,
     entries: Mutex<HashMap<String, Arc<SessionEntry>>>,
     /// Lets process exit callbacks reach the registry without keeping it alive.
@@ -90,11 +111,14 @@ pub struct Sessions {
 impl Sessions {
     /// Loads saved sessions. Any that were running belonged to a daemon that
     /// is gone, so their processes are lost: they become interrupted.
-    pub fn load(store: SessionStore, path: OsString) -> Arc<Self> {
+    pub fn load(store: SessionStore, path: OsString, worktrees_dir: PathBuf) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_QUEUE);
         let mut entries = HashMap::new();
         for mut meta in store.load_all() {
             let mut changed = false;
+            if meta.attention.take().is_some() {
+                changed = true;
+            }
             if meta.status.is_live() {
                 let last_activity = store.transcript_modified(&meta.id);
                 mark_interrupted(&mut meta, last_activity);
@@ -121,6 +145,7 @@ impl Sessions {
         Arc::new_cyclic(|this| Self {
             store,
             path,
+            worktrees_dir,
             events,
             entries: Mutex::new(entries),
             this: this.clone(),
@@ -149,17 +174,27 @@ impl Sessions {
     }
 
     pub fn create(&self, request: CreateRequest) -> Result<SessionMeta, SessionsError> {
-        let cwd = existing_dir(&request.cwd)?;
+        let chosen = existing_dir(&request.cwd)?;
         let agent_session_id = match request.agent {
             Agent::Claude => Some(Uuid::new_v4().to_string()),
-            Agent::Shell => None,
+            // Codex and Gemini pick their own ids; see `launch_for`.
+            Agent::Codex | Agent::Gemini | Agent::Shell => None,
+        };
+        let id = Uuid::new_v4().to_string();
+        let name = session_name(request.name.as_deref(), &chosen);
+        let (worktree, cwd) = if request.worktree {
+            let git = Git::find(&self.path)?;
+            let (worktree, cwd) = git.create(&chosen, &self.worktrees_dir, &name, &id)?;
+            (Some(worktree), cwd)
+        } else {
+            (None, chosen)
         };
         let project = request.project.as_ref();
         let meta = SessionMeta {
-            id: Uuid::new_v4().to_string(),
-            name: session_name(request.name.as_deref(), &cwd),
+            id,
+            name,
             agent: request.agent,
-            cwd: request.cwd,
+            cwd: cwd.display().to_string(),
             agent_session_id,
             status: SessionStatus::Running,
             exit_code: None,
@@ -169,20 +204,31 @@ impl Sessions {
             project_id: project.map(|project| project.id.clone()),
             claude_config_dir: project.and_then(|project| project.claude_config_dir.clone()),
             ssh_key: project.and_then(|project| project.ssh_key.clone()),
+            context_dir: request.context_dir,
+            attention: None,
+            worktree,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         };
-        let launch = launch_for(&self.path, &meta, &cwd, false)?;
-        let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
-        let started = session
-            .start(&launch, self.exit_handler(&meta.id))
-            .map_err(SessionsError::from)
-            .and_then(|()| self.store.save(&meta).map_err(SessionsError::from));
-        if let Err(error) = started {
-            // Nothing should remain of a session that never started.
-            let _ = self.store.remove(&meta.id);
-            return Err(error);
-        }
+        let started = launch_for(&self.path, &meta, &cwd, false).and_then(|launch| {
+            let session = Session::new(Some(self.store.open_transcript(&meta.id)?));
+            session.start(&launch, self.exit_handler(&meta.id))?;
+            self.store.save(&meta)?;
+            Ok(session)
+        });
+        let session = match started {
+            Ok(session) => session,
+            Err(error) => {
+                // Nothing should remain of a session that never started.
+                let _ = self.store.remove(&meta.id);
+                if let Some(worktree) = &meta.worktree
+                    && let Ok(git) = Git::find(&self.path)
+                {
+                    let _ = git.remove(worktree);
+                }
+                return Err(error);
+            }
+        };
         let entry = Arc::new(SessionEntry {
             meta: Mutex::new(meta.clone()),
             session,
@@ -213,6 +259,7 @@ impl Sessions {
         meta.exit_code = None;
         meta.ended_at = None;
         meta.idle_since = None;
+        meta.attention = None;
         self.store.save(&meta)?;
         let updated = meta.clone();
         drop(meta);
@@ -223,7 +270,18 @@ impl Sessions {
     }
 
     pub fn claude_available(&self) -> bool {
-        executable::find_in(&self.path, CLAUDE_COMMAND).is_some()
+        self.available_agents().contains(&Agent::Claude)
+    }
+
+    pub fn available_agents(&self) -> Vec<Agent> {
+        Agent::PROGRAMS
+            .into_iter()
+            .filter(|agent| {
+                agent
+                    .command()
+                    .is_some_and(|command| executable::find_in(&self.path, command).is_some())
+            })
+            .collect()
     }
 
     /// Ends every process for "Encerrar tudo" or a daemon stop. Sessions are
@@ -258,6 +316,7 @@ impl Sessions {
             let summarize = with_summary && can_summarize(meta);
             meta.status = SessionStatus::Finished;
             meta.idle_since = None;
+            meta.attention = None;
             // Exited and interrupted sessions keep the time they actually stopped.
             if meta.ended_at.is_none() {
                 meta.ended_at = Some(now()?);
@@ -374,6 +433,80 @@ impl Sessions {
         })
     }
 
+    /// Any session can be renamed, finished ones included.
+    pub fn rename(&self, id: &str, name: &str) -> Result<SessionMeta, SessionsError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(SessionsError::EmptyName);
+        }
+        self.update(id, |meta| {
+            meta.name = name.to_owned();
+            Ok(())
+        })
+    }
+
+    /// The Claude conversation of a session, when Claude wrote a log for it.
+    /// `home` locates the default Claude config folder.
+    pub fn conversation(
+        &self,
+        id: &str,
+        home: &Path,
+    ) -> Result<Option<Conversation>, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let meta = lock(&entry.meta)?.clone();
+        Ok(conversation_of(&meta, home))
+    }
+
+    /// Finished sessions whose name, notes, summary or conversation text
+    /// contain `query`, ignoring case, in creation order.
+    pub fn search(&self, query: &str, home: &Path) -> Vec<String> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let contains = |text: &str| text.to_lowercase().contains(&query);
+        self.list()
+            .into_iter()
+            .filter(|meta| meta.status == SessionStatus::Finished)
+            .filter(|meta| {
+                contains(&meta.name)
+                    || contains(&meta.notes)
+                    || self
+                        .store
+                        .read_summary(&meta.id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|summary| contains(&summary))
+                    || conversation_of(meta, home)
+                        .is_some_and(|conversation| conversation.mentions(&query))
+            })
+            .map(|meta| meta.id)
+            .collect()
+    }
+
+    pub fn worktree_status(&self, id: &str) -> Result<WorktreeStatus, SessionsError> {
+        let worktree = self.worktree_of(id)?;
+        Ok(Git::find(&self.path)?.status(&worktree)?)
+    }
+
+    /// Removes the worktree of a session that no longer runs, if it has no
+    /// uncommitted changes. The session keeps the record of it.
+    pub fn remove_worktree(&self, id: &str) -> Result<RemovedBranch, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let meta = lock(&entry.meta)?.clone();
+        if meta.status.is_live() {
+            return Err(SessionsError::InvalidState(meta.status));
+        }
+        let worktree = meta.worktree.ok_or(SessionsError::NoWorktree)?;
+        Ok(Git::find(&self.path)?.remove(&worktree)?)
+    }
+
+    fn worktree_of(&self, id: &str) -> Result<crate::worktree::Worktree, SessionsError> {
+        let entry = self.get(id).ok_or(SessionsError::NotFound)?;
+        let worktree = lock(&entry.meta)?.worktree.clone();
+        worktree.ok_or(SessionsError::NoWorktree)
+    }
+
     pub fn transcript(&self, id: &str) -> Result<ServerMessage, SessionsError> {
         self.get(id).ok_or(SessionsError::NotFound)?;
         let bytes = self.store.read_transcript(id, TRANSCRIPT_VIEW_BYTES + 1)?;
@@ -422,6 +555,63 @@ impl Sessions {
 
     pub fn announce_projects(&self, projects: Vec<Project>) {
         self.announce(ServerMessage::ProjectListResult { projects });
+    }
+
+    /// Applies the signals the Claude hooks left. A session already waiting
+    /// keeps its first reason: a `Notification` after `Stop` is Claude Code
+    /// reminding that the user has not answered yet.
+    pub fn refresh_attention(&self) {
+        let entries: Vec<Arc<SessionEntry>> = match self.entries.lock() {
+            Ok(entries) => entries.values().cloned().collect(),
+            Err(_) => return,
+        };
+        for entry in entries {
+            let Ok(mut meta) = entry.meta.lock() else {
+                continue;
+            };
+            if meta.agent != Agent::Claude {
+                continue;
+            }
+            let signal = match self.store.take_signal(&meta.id) {
+                Ok(Some(signal)) => signal,
+                Ok(None) => continue,
+                Err(error) => {
+                    eprintln!("failed to read hook signal {}: {error}", meta.id);
+                    continue;
+                }
+            };
+            let next = match signal {
+                Signal::Waiting(_) if !meta.status.is_live() => continue,
+                Signal::Waiting(_) if meta.attention.is_some() => continue,
+                Signal::Waiting(reason) => Some(reason),
+                Signal::Clear if meta.attention.is_none() => continue,
+                Signal::Clear => None,
+            };
+            meta.attention = next;
+            self.save_and_announce(meta);
+        }
+    }
+
+    /// The user typed in the session: it no longer waits.
+    pub fn clear_attention(&self, id: &str) {
+        let Some(entry) = self.get(id) else {
+            return;
+        };
+        let Ok(mut meta) = entry.meta.lock() else {
+            return;
+        };
+        if meta.attention.take().is_some() {
+            self.save_and_announce(meta);
+        }
+    }
+
+    fn save_and_announce(&self, meta: MutexGuard<'_, SessionMeta>) {
+        if let Err(error) = self.store.save(&meta) {
+            eprintln!("failed to save session {}: {error}", meta.id);
+        }
+        let updated = meta.clone();
+        drop(meta);
+        self.announce(ServerMessage::SessionUpdated { session: updated });
     }
 
     /// Moves live sessions between running and idle based on their last
@@ -480,6 +670,7 @@ impl Sessions {
         }
         meta.status = SessionStatus::Exited;
         meta.idle_since = None;
+        meta.attention = None;
         meta.exit_code = exit_code;
         meta.ended_at = now().ok();
         if let Err(error) = self.store.save(&meta) {
@@ -535,17 +726,27 @@ fn launch_for(
     cwd: &Path,
     resume: bool,
 ) -> Result<Launch, SessionsError> {
-    let (program, args) = match (meta.agent, meta.agent_session_id.as_deref()) {
+    let args = match (meta.agent, meta.agent_session_id.as_deref()) {
         (Agent::Claude, Some(id)) => {
-            let program =
-                executable::find_in(path, CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
             let flag = if resume { "--resume" } else { "--session-id" };
-            (
-                Some(program.to_string_lossy().into_owned()),
-                vec![flag.to_owned(), id.to_owned()],
-            )
+            let mut args = vec![flag.to_owned(), id.to_owned()];
+            args.extend(hook_args(meta));
+            args
         }
-        _ => (None, Vec::new()),
+        // Neither CLI lets the caller pick a session id, so resuming takes
+        // the most recent conversation of the session's folder.
+        (Agent::Codex, _) if resume => vec!["resume".to_owned(), "--last".to_owned()],
+        (Agent::Gemini, _) if resume => vec!["--resume".to_owned(), "latest".to_owned()],
+        _ => Vec::new(),
+    };
+    let program = match meta.agent.command() {
+        Some(command) => Some(
+            executable::find_in(path, command)
+                .ok_or(SessionsError::AgentNotFound(command))?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
     };
     Ok(Launch {
         program,
@@ -556,14 +757,50 @@ fn launch_for(
     })
 }
 
+/// Claude keeps its logs in the session's config folder: the project's
+/// account, or `~/.claude` for the default one.
+fn conversation_of(meta: &SessionMeta, home: &Path) -> Option<Conversation> {
+    if meta.agent != Agent::Claude {
+        return None;
+    }
+    let session_id = meta.agent_session_id.as_deref()?;
+    let config_dir = meta
+        .claude_config_dir
+        .as_ref()
+        .map_or_else(|| home.join(".claude"), PathBuf::from);
+    let path = conversation::find_log(&config_dir, session_id)?;
+    conversation::read(&path)
+        .map_err(|error| eprintln!("failed to read conversation {}: {error}", meta.id))
+        .ok()
+}
+
+/// Hooks for a Claude session, with its project context while the folder
+/// exists (a deleted project loses it). None when the daemon cannot name its
+/// own binary for the hooks.
+fn hook_args(meta: &SessionMeta) -> Vec<String> {
+    let Ok(program) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let context_dir = meta
+        .context_dir
+        .as_deref()
+        .map(Path::new)
+        .filter(|dir| dir.is_dir());
+    hooks::claude_args(&program, context_dir)
+}
+
 /// Account and SSH key of the session's project. Without a project the
 /// default Claude account is used, even if the daemon inherited another.
 /// Shells get them too, so `claude` and `git` run inside them match.
 fn environment(meta: &SessionMeta) -> Vec<(String, Option<String>)> {
-    let mut env = vec![(
-        "CLAUDE_CONFIG_DIR".to_owned(),
-        meta.claude_config_dir.clone(),
-    )];
+    let mut env = vec![
+        (
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            meta.claude_config_dir.clone(),
+        ),
+        // Lets the hooks find their session.
+        (hooks::SESSION_ENV.to_owned(), Some(meta.id.clone())),
+    ];
     if let Some(key) = &meta.ssh_key {
         env.push(("GIT_SSH_COMMAND".to_owned(), Some(ssh_command(key))));
     }
@@ -571,9 +808,7 @@ fn environment(meta: &SessionMeta) -> Vec<(String, Option<String>)> {
 }
 
 fn ssh_command(key: &str) -> String {
-    // Single quotes keep spaces in the path; embedded quotes are escaped.
-    let quoted = key.replace('\'', "'\\''");
-    format!("ssh -i '{quoted}' -o IdentitiesOnly=yes")
+    format!("ssh -i {} -o IdentitiesOnly=yes", hooks::shell_quote(key))
 }
 
 /// Uses the given name, or the folder name when it is blank.
@@ -609,6 +844,7 @@ mod tests {
         Sessions::load(
             SessionStore::new(root.to_path_buf()),
             std::env::var_os("PATH").unwrap_or_default(),
+            root.join("worktrees"),
         )
     }
 
@@ -619,6 +855,8 @@ mod tests {
             cwd: std::env::temp_dir().display().to_string(),
             name: Some(name.into()),
             project: None,
+            context_dir: None,
+            worktree: false,
         }
     }
 
@@ -668,7 +906,98 @@ mod tests {
         let Ok(launch) = launch_for(&path, &meta, Path::new("/tmp"), true) else {
             return; // claude is not installed on this machine
         };
-        assert_eq!(launch.args, ["--resume", "abc"]);
+        assert_eq!(launch.args[..3], ["--resume", "abc", "--settings"]);
+    }
+
+    /// A PATH with executable stubs named after `commands`.
+    #[cfg(unix)]
+    fn fake_path(root: &Path, commands: &[&str]) -> std::ffi::OsString {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        for command in commands {
+            let file = bin.join(command);
+            std::fs::write(&file, "#!/bin/sh\n").expect("stub");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        bin.into_os_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_and_gemini_resume_the_latest_conversation() {
+        let root = temp_root();
+        let path = fake_path(&root, &["codex", "gemini"]);
+        let cwd = Path::new("/tmp");
+        for (agent, resume_args) in [
+            (Agent::Codex, ["resume", "--last"]),
+            (Agent::Gemini, ["--resume", "latest"]),
+        ] {
+            let meta = SessionMeta { agent, ..meta("s") };
+            let start = launch_for(&path, &meta, cwd, false).expect("start");
+            assert!(
+                start
+                    .program
+                    .expect("program")
+                    .ends_with(agent.command().expect("command"))
+            );
+            assert!(start.args.is_empty());
+            let resume = launch_for(&path, &meta, cwd, true).expect("resume");
+            assert_eq!(resume.args, resume_args);
+        }
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_agent_is_reported_by_name() {
+        let root = temp_root();
+        let path = fake_path(&root, &["gemini"]);
+        let codex = SessionMeta {
+            agent: Agent::Codex,
+            ..meta("s")
+        };
+        assert!(matches!(
+            launch_for(&path, &codex, Path::new("/tmp"), false),
+            Err(SessionsError::AgentNotFound("codex"))
+        ));
+        let shell = launch_for(&path, &meta("s"), Path::new("/tmp"), false).expect("shell");
+        assert!(shell.program.is_none());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn available_agents_follow_the_path() {
+        let root = temp_root();
+        let path = fake_path(&root, &["gemini", "claude"]);
+        let sessions = Sessions::load(
+            SessionStore::new(root.join("data")),
+            path,
+            root.join("worktrees"),
+        );
+        assert_eq!(sessions.available_agents(), [Agent::Claude, Agent::Gemini]);
+        assert!(sessions.claude_available());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn claude_gets_the_context_folder_while_it_exists() {
+        let dir = temp_root();
+        std::fs::create_dir_all(&dir).expect("dir");
+        let with_context = SessionMeta {
+            context_dir: Some(dir.display().to_string()),
+            ..meta("s")
+        };
+        let args = hook_args(&with_context);
+        assert_eq!(
+            args[..2],
+            ["--add-dir".to_owned(), dir.display().to_string()]
+        );
+        assert_eq!(args[2], "--settings");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+        assert_eq!(hook_args(&with_context)[0], "--settings");
+        assert_eq!(hook_args(&meta("s"))[0], "--settings");
     }
 
     #[test]
@@ -685,6 +1014,7 @@ mod tests {
                     "CLAUDE_CONFIG_DIR".to_owned(),
                     Some("/home/me/.claude-work".to_owned())
                 ),
+                (hooks::SESSION_ENV.to_owned(), Some("s".to_owned())),
                 (
                     "GIT_SSH_COMMAND".to_owned(),
                     Some("ssh -i '/home/me/.ssh/it'\\''s key' -o IdentitiesOnly=yes".to_owned())
@@ -697,7 +1027,10 @@ mod tests {
     fn default_account_clears_inherited_config_dir() {
         assert_eq!(
             environment(&meta("s")),
-            [("CLAUDE_CONFIG_DIR".to_owned(), None)]
+            [
+                ("CLAUDE_CONFIG_DIR".to_owned(), None),
+                (hooks::SESSION_ENV.to_owned(), Some("s".to_owned())),
+            ]
         );
     }
 
@@ -716,6 +1049,9 @@ mod tests {
             project_id: None,
             claude_config_dir: None,
             ssh_key: None,
+            context_dir: None,
+            attention: None,
+            worktree: None,
             notes: String::new(),
             summary_status: SummaryStatus::None,
         }
@@ -742,6 +1078,218 @@ mod tests {
     }
 
     #[test]
+    fn rename_trims_and_rejects_blank_names() {
+        let root = temp_root();
+        let store = SessionStore::new(root.clone());
+        store.save(&meta("a")).expect("save");
+        let sessions = load(&root);
+        let renamed = sessions.rename("a", "  api login ").expect("rename");
+        assert_eq!(renamed.name, "api login");
+        assert!(matches!(
+            sessions.rename("a", "   "),
+            Err(SessionsError::EmptyName)
+        ));
+        assert!(matches!(
+            sessions.rename("missing", "x"),
+            Err(SessionsError::NotFound)
+        ));
+        let reloaded = SessionStore::new(root.clone()).load_all();
+        assert_eq!(reloaded[0].name, "api login");
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A live Claude session whose `claude` is a script that waits, so the
+    /// test needs no real Claude Code.
+    #[cfg(unix)]
+    fn fake_claude_session(root: &Path) -> (Arc<Sessions>, SessionMeta) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let script = bin.join("claude");
+        std::fs::write(&script, "#!/bin/sh\nexec /bin/sleep 30\n").expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let sessions = Sessions::load(
+            SessionStore::new(root.join("sessions")),
+            bin.into_os_string(),
+            root.join("worktrees"),
+        );
+        let meta = sessions
+            .create(CreateRequest {
+                agent: Agent::Claude,
+                cwd: std::env::temp_dir().display().to_string(),
+                name: None,
+                project: None,
+                context_dir: None,
+                worktree: false,
+            })
+            .expect("create");
+        (sessions, meta)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_signals_mark_and_clear_waiting() {
+        use crate::protocol::Attention;
+        let root = temp_root();
+        let (sessions, meta) = fake_claude_session(&root);
+        let sessions_dir = root.join("sessions");
+        let attention = |sessions: &Sessions| {
+            sessions
+                .list()
+                .into_iter()
+                .find(|session| session.id == meta.id)
+                .and_then(|session| session.attention)
+        };
+
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Waiting(Attention::Done))
+            .expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), Some(Attention::Done));
+
+        // A reminder keeps the first reason.
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Waiting(Attention::Input))
+            .expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), Some(Attention::Done));
+
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Clear).expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), None);
+
+        hooks::write_signal(&sessions_dir, &meta.id, Signal::Waiting(Attention::Input))
+            .expect("signal");
+        sessions.refresh_attention();
+        assert_eq!(attention(&sessions), Some(Attention::Input));
+        sessions.clear_attention(&meta.id);
+        assert_eq!(attention(&sessions), None);
+
+        sessions.shutdown();
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn search_looks_at_name_notes_summary_and_conversation() {
+        let root = temp_root();
+        let store = SessionStore::new(root.join("sessions"));
+        let config = root.join("claude");
+        let log_dir = config.join("projects").join("-dev-api");
+        std::fs::create_dir_all(&log_dir).expect("log dir");
+        std::fs::write(
+            log_dir.join("conv.jsonl"),
+            r#"{"type":"user","message":{"content":"Fix the OAuth callback"}}"#,
+        )
+        .expect("log");
+        let finished = |id: &str| SessionMeta {
+            status: SessionStatus::Finished,
+            ..meta(id)
+        };
+        store
+            .save(&SessionMeta {
+                name: "Billing".into(),
+                ..finished("by-name")
+            })
+            .expect("save");
+        store
+            .save(&SessionMeta {
+                notes: "check billing later".into(),
+                ..finished("by-notes")
+            })
+            .expect("save");
+        store.save(&finished("by-summary")).expect("save");
+        store
+            .save_summary("by-summary", "Billing page done")
+            .expect("summary");
+        store
+            .save(&SessionMeta {
+                agent: Agent::Claude,
+                agent_session_id: Some("conv".into()),
+                claude_config_dir: Some(config.display().to_string()),
+                ..finished("by-conversation")
+            })
+            .expect("save");
+        store
+            .save(&SessionMeta {
+                name: "billing live".into(),
+                status: SessionStatus::Exited,
+                ..meta("not-finished")
+            })
+            .expect("save");
+
+        let sessions = Sessions::load(store, OsString::new(), root.join("worktrees"));
+        let mut billing = sessions.search(" BILLING ", &root);
+        billing.sort();
+        assert_eq!(billing, ["by-name", "by-notes", "by-summary"]);
+        assert_eq!(sessions.search("oauth", &root), ["by-conversation"]);
+        assert!(sessions.search("  ", &root).is_empty());
+        let conversation = sessions
+            .conversation("by-conversation", &root)
+            .expect("known")
+            .expect("log");
+        assert_eq!(conversation.entries.len(), 1);
+        assert_eq!(
+            sessions.conversation("by-name", &root).expect("known"),
+            None
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_session_runs_in_its_own_checkout() {
+        use std::process::Command;
+        let root = temp_root();
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).expect("repo");
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=Cohors",
+                    "-c",
+                    "user.email=cohors@example.com",
+                ])
+                .args(args)
+                .output()
+                .expect("git")
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("README.md"), "hi").expect("file");
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+
+        let sessions = load(&root);
+        let meta = sessions
+            .create(CreateRequest {
+                worktree: true,
+                cwd: repo.display().to_string(),
+                ..shell_request("isolated")
+            })
+            .expect("create");
+        let worktree = meta.worktree.clone().expect("worktree");
+        assert_eq!(meta.cwd, worktree.path);
+        assert!(Path::new(&meta.cwd).join("README.md").is_file());
+        assert!(matches!(
+            sessions.remove_worktree(&meta.id),
+            Err(SessionsError::InvalidState(_))
+        ));
+
+        sessions.finish(&meta.id, false).expect("finish");
+        sessions.stop_process(&meta.id);
+        assert!(sessions.worktree_status(&meta.id).expect("status").exists);
+        assert_eq!(
+            sessions.remove_worktree(&meta.id).expect("remove"),
+            RemovedBranch::Deleted
+        );
+        assert!(!sessions.worktree_status(&meta.id).expect("status").exists);
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn rejects_missing_folder() {
         let sessions = load(&temp_root());
         let result = sessions.create(CreateRequest {
@@ -749,6 +1297,8 @@ mod tests {
             cwd: "/definitely/not/here".into(),
             name: None,
             project: None,
+            context_dir: None,
+            worktree: false,
         });
         assert!(matches!(result, Err(SessionsError::InvalidCwd(_))));
     }

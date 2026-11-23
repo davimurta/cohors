@@ -7,6 +7,7 @@ import field from '../components/Field.module.css';
 import { FolderField } from '../components/FolderField.tsx';
 import { Select } from '../components/Select.tsx';
 import { environmentSummary, folderName } from '../projects/labels.ts';
+import { AGENT_LABEL } from '../session/format.ts';
 import { useAppStore } from '../state/store.ts';
 import styles from './NewSessionDialog.module.css';
 
@@ -22,10 +23,14 @@ const AGENT_OPTIONS: AgentOption[] = [
     title: 'Claude Code',
     description: 'Agente de código no terminal, com o seu login',
   },
+  { agent: 'codex', title: 'Codex', description: 'Agente de código da OpenAI no terminal' },
+  { agent: 'gemini', title: 'Gemini', description: 'Agente do Google no terminal' },
   { agent: 'shell', title: 'Shell', description: 'Terminal comum do seu sistema' },
 ];
 
-const CLAUDE_MISSING = 'Não encontrado neste computador';
+const AGENT_MISSING = 'Não encontrado neste computador';
+/** Codex and Gemini resume by folder, not by conversation id. */
+const RESUMES_LATEST: ReadonlySet<Agent> = new Set(['codex', 'gemini']);
 const NO_PROJECT = '';
 
 export function NewSessionDialog() {
@@ -40,7 +45,7 @@ export function NewSessionDialog() {
 }
 
 function NewSessionForm({ onCancel }: { onCancel: () => void }) {
-  const claudeAvailable = useAppStore((state) => state.claudeAvailable);
+  const availableAgents = useAppStore((state) => state.availableAgents);
   const creating = useAppStore((state) => state.creating);
   const createError = useAppStore((state) => state.createError);
   const createSession = useAppStore((state) => state.createSession);
@@ -50,18 +55,24 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
   const presetProjectId = useAppStore((state) => state.newSessionProjectId);
 
   const presetProject = projects.find((project) => project.id === presetProjectId);
-  const [agent, setAgent] = useState<Agent>(claudeAvailable === false ? 'shell' : 'claude');
+  const isMissing = (candidate: Agent) =>
+    candidate !== 'shell' && availableAgents !== null && !availableAgents.includes(candidate);
+  const [agent, setAgent] = useState<Agent>(isMissing('claude') ? 'shell' : 'claude');
   const [projectId, setProjectId] = useState(presetProject?.id ?? NO_PROJECT);
   const [cwd, setCwd] = useState(presetProject?.root ?? '');
   const [name, setName] = useState('');
+  const [worktree, setWorktree] = useState(false);
   const ids = {
     agent: useId(),
+    agentHint: useId(),
     project: useId(),
     projectLabel: useId(),
     projectHint: useId(),
     folder: useId(),
     name: useId(),
     nameHint: useId(),
+    worktree: useId(),
+    worktreeHint: useId(),
   };
   const project = projects.find((candidate) => candidate.id === projectId);
 
@@ -75,18 +86,23 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (cwd === '' || creating) return;
-    createSession({ agent, cwd, name, projectId: project?.id ?? null });
+    createSession({ agent, cwd, name, projectId: project?.id ?? null, worktree });
   };
 
   return (
     <form className={styles.form} onSubmit={submit}>
-      <div className={styles.group} role="group" aria-labelledby={ids.agent}>
+      <div
+        className={styles.group}
+        role="group"
+        aria-labelledby={ids.agent}
+        aria-describedby={RESUMES_LATEST.has(agent) ? ids.agentHint : undefined}
+      >
         <span id={ids.agent} className={field.label}>
           Agente
         </span>
         <div className={styles.agents}>
           {AGENT_OPTIONS.map((option) => {
-            const missing = option.agent === 'claude' && claudeAvailable === false;
+            const missing = isMissing(option.agent);
             const selected = agent === option.agent;
             return (
               <button
@@ -105,12 +121,18 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
                   )}
                 </span>
                 <span className={styles.agentDescription}>
-                  {missing ? CLAUDE_MISSING : option.description}
+                  {missing ? AGENT_MISSING : option.description}
                 </span>
               </button>
             );
           })}
         </div>
+        {RESUMES_LATEST.has(agent) && (
+          <span id={ids.agentHint} className={field.hint}>
+            Ao retomar, o {AGENT_LABEL[agent]} abre a conversa mais recente desta pasta. Para várias
+            sessões na mesma pasta, isole cada uma em worktree.
+          </span>
+        )}
       </div>
 
       {projects.length > 0 && (
@@ -160,6 +182,26 @@ function NewSessionForm({ onCancel }: { onCancel: () => void }) {
         <span id={ids.nameHint} className={field.hint}>
           Se ficar em branco, usamos o nome da pasta.
         </span>
+      </div>
+
+      <div className={styles.checkField}>
+        <input
+          id={ids.worktree}
+          type="checkbox"
+          className={styles.checkbox}
+          checked={worktree}
+          aria-describedby={ids.worktreeHint}
+          onChange={(event) => setWorktree(event.target.checked)}
+        />
+        <div className={styles.checkText}>
+          <label htmlFor={ids.worktree} className={field.label}>
+            Isolar em worktree
+          </label>
+          <span id={ids.worktreeHint} className={field.hint}>
+            Cria uma branch e uma pasta só para esta sessão, a partir do commit atual. A pasta
+            precisa estar num repositório git.
+          </span>
+        </div>
       </div>
 
       {createError !== null && (

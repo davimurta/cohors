@@ -29,6 +29,30 @@ export function toggleSplit(layout: Layout, id: string): Layout {
   return { panes: [...panes, id], selectedId: id };
 }
 
+/** Moves a pane to another position; the focus stays on it. */
+export function movePane(layout: Layout, id: string, index: number): Layout {
+  const from = layout.panes.indexOf(id);
+  const to = Math.max(0, Math.min(index, layout.panes.length - 1));
+  if (from === -1 || from === to) return layout;
+  const panes = layout.panes.filter((pane) => pane !== id);
+  panes.splice(to, 0, id);
+  return { panes, selectedId: id };
+}
+
+/** How the split divides the space: the first column's and first row's share. */
+export interface SplitSizes {
+  column: number;
+  row: number;
+}
+
+export const EVEN_SPLIT: SplitSizes = { column: 0.5, row: 0.5 };
+/** Each pane keeps at least this share, so a terminal never collapses. */
+export const MIN_SHARE = 0.2;
+
+export function clampShare(share: number): number {
+  return Math.min(1 - MIN_SHARE, Math.max(MIN_SHARE, share));
+}
+
 export function closePane(layout: Layout, id: string): Layout {
   const index = layout.panes.indexOf(id);
   if (index === -1 || layout.panes.length === 1) return layout;

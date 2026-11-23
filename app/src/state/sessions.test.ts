@@ -22,6 +22,9 @@ function meta(id: string): SessionMeta {
     projectId: null,
     claudeConfigDir: null,
     sshKey: null,
+    contextDir: null,
+    attention: null,
+    worktree: null,
     notes: '',
     summaryStatus: 'none',
   };
@@ -34,14 +37,23 @@ const withSessions = (ids: string[], overrides: Partial<SessionsState> = {}): Se
 });
 
 describe('applyServerMessage', () => {
-  it('records claude availability on ready', () => {
-    const state = applyServerMessage(initialSessionsState, {
-      type: 'ready',
-      protocolVersion: 1,
-      daemonVersion: '0.1.0',
-      claudeAvailable: false,
-    });
+  it('records the available agents and the daemon build on ready', () => {
+    const state = applyServerMessage(
+      { ...initialSessionsState, daemonOutdated: true },
+      {
+        type: 'ready',
+        protocolVersion: 2,
+        daemonVersion: '0.1.0',
+        buildId: 'abc',
+        claudeAvailable: false,
+        availableAgents: ['codex'],
+      },
+    );
     expect(state.claudeAvailable).toBe(false);
+    expect(state.availableAgents).toEqual(['codex']);
+    expect(state.daemonBuildId).toBe('abc');
+    // A new handshake is checked again from scratch.
+    expect(state.daemonOutdated).toBe(false);
   });
 
   it('selects the first session when nothing is selected', () => {
@@ -158,7 +170,14 @@ describe('resume', () => {
 });
 
 describe('projects', () => {
-  const project = { id: 'p', name: 'api', root: '/dev/api', claudeConfigDir: null, sshKey: null };
+  const project = {
+    id: 'p',
+    name: 'api',
+    root: '/dev/api',
+    claudeConfigDir: null,
+    sshKey: null,
+    contextDir: null,
+  };
 
   it('closes the dialog once the save is confirmed', () => {
     const state = applyServerMessage(
@@ -183,7 +202,53 @@ describe('projects', () => {
       { type: 'error', code: 'invalid_cwd', message: 'folder does not exist', ref: 'p' },
     );
     expect(state.savingProject).toBe(false);
-    expect(state.projectError).toBe('A pasta raiz não existe. Escolha outra.');
+    expect(state.projectError).toBe('A pasta escolhida não existe. Escolha outra.');
+  });
+});
+
+describe('project context', () => {
+  const editor = { projectId: 'p', files: null, saving: false, error: null };
+  const files = { dir: '/data/contexts/p', rules: 'Use tabs.', plan: '1. Login' };
+  const result = { type: 'project.context.result', id: 'p', ...files } as const;
+
+  it('fills the editor when the files arrive', () => {
+    const state = applyServerMessage({ ...withSessions([]), contextEditor: editor }, result);
+    expect(state.contextEditor?.files).toEqual(files);
+  });
+
+  it('ignores files of another project', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), contextEditor: editor },
+      { ...result, id: 'other' },
+    );
+    expect(state.contextEditor?.files).toBeNull();
+  });
+
+  it('closes the editor after a save', () => {
+    const saving = { ...editor, files, saving: true };
+    const state = applyServerMessage({ ...withSessions([]), contextEditor: saving }, result);
+    expect(state.contextEditor).toBeNull();
+  });
+
+  it('keeps the text and shows the error when a save fails', () => {
+    const saving = { ...editor, files, saving: true };
+    const state = applyServerMessage(
+      { ...withSessions([]), contextEditor: saving },
+      { type: 'error', code: 'internal', message: 'disk full', ref: 'p' },
+    );
+    expect(state.contextEditor).toEqual({
+      ...saving,
+      saving: false,
+      error: 'Não foi possível salvar as regras e o plano.',
+    });
+  });
+
+  it('closes the editor when its project is deleted', () => {
+    const state = applyServerMessage(
+      { ...withSessions([]), contextEditor: editor },
+      { type: 'project.list.result', projects: [] },
+    );
+    expect(state.contextEditor).toBeNull();
   });
 });
 
@@ -263,5 +328,106 @@ describe('applyConnectionStatus', () => {
     );
     expect(state.connection).toBe('disconnected');
     expect(state.creating).toBe(false);
+  });
+});
+
+describe('history search and conversations', () => {
+  it('keeps only the answer to the current query', () => {
+    const searching = { ...withSessions([]), historySearch: { query: 'bill', ids: null } };
+    const stale = applyServerMessage(searching, {
+      type: 'session.search.result',
+      query: 'bi',
+      ids: ['x'],
+    });
+    expect(stale.historySearch?.ids).toBeNull();
+    const current = applyServerMessage(searching, {
+      type: 'session.search.result',
+      query: 'bill',
+      ids: ['a'],
+    });
+    expect(current.historySearch).toEqual({ query: 'bill', ids: ['a'] });
+  });
+
+  it('caches conversations and drops them with the session', () => {
+    const loaded = applyServerMessage(withSessions(['a']), {
+      type: 'session.conversation.result',
+      id: 'a',
+      entries: [],
+      usage: null,
+    });
+    expect(loaded.conversations['a']).toEqual({ entries: [], usage: null });
+    const deleted = applyServerMessage(loaded, { type: 'session.deleted', id: 'a' });
+    expect(deleted.conversations).toEqual({});
+  });
+});
+
+describe('restored layout', () => {
+  const restored = {
+    panes: ['a', 'b', 'gone'],
+    selectedId: 'b',
+    sidebarTab: 'active' as const,
+    splitSizes: { column: 0.6, row: 0.5 },
+  };
+
+  it('brings back the split without sessions that are gone', () => {
+    const state = applyServerMessage(
+      { ...initialSessionsState, restoredLayout: restored },
+      { type: 'session.list.result', sessions: [meta('a'), meta('b')] },
+    );
+    expect(state.panes).toEqual(['a', 'b']);
+    expect(state.selectedId).toBe('b');
+    expect(state.restoredLayout).toBeNull();
+  });
+
+  it('falls back to the first session when the focused one is gone', () => {
+    const state = applyServerMessage(
+      { ...initialSessionsState, restoredLayout: { ...restored, selectedId: 'gone' } },
+      { type: 'session.list.result', sessions: [meta('a'), meta('b')] },
+    );
+    expect(state.selectedId).toBe('a');
+    expect(state.panes).toEqual(['a']);
+  });
+});
+
+describe('worktrees', () => {
+  const status = { exists: true, changes: 2, commits: 0 };
+
+  it('shows a removal error only while a request is pending', () => {
+    const pending = {
+      ...withSessions(['a']),
+      worktrees: { a: { status, removing: true, branchDeleted: null, error: null } },
+    };
+    const failed = applyServerMessage(pending, {
+      type: 'error',
+      code: 'worktree_dirty',
+      message: 'dirty',
+      ref: 'a',
+    });
+    expect(failed.worktrees['a']?.removing).toBe(false);
+    expect(failed.worktrees['a']?.error).toMatch(/mudanças sem commit/);
+
+    const idle = { ...pending, worktrees: { a: { ...pending.worktrees.a, removing: false } } };
+    const ignored = applyServerMessage(idle, {
+      type: 'error',
+      code: 'bad_request',
+      message: 'empty name',
+      ref: 'a',
+    });
+    expect(ignored.worktrees['a']?.error).toBeNull();
+  });
+
+  it('records the result of a removal', () => {
+    const state = applyServerMessage(withSessions(['a']), {
+      type: 'session.worktree.result',
+      id: 'a',
+      status: { exists: false, changes: 0, commits: 0 },
+      branchDeleted: true,
+    });
+    expect(state.worktrees['a']).toEqual({
+      status: { exists: false, changes: 0, commits: 0 },
+      removing: false,
+      branchDeleted: true,
+      error: null,
+    });
   });
 });

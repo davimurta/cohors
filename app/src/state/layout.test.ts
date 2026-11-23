@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionMeta, SessionStatus } from '@cohors/protocol';
-import { MAX_PANES, closePane, pruneLayout, selectSession, toggleSplit } from './layout.ts';
+import {
+  MAX_PANES,
+  clampShare,
+  closePane,
+  movePane,
+  pruneLayout,
+  selectSession,
+  toggleSplit,
+} from './layout.ts';
 
 const single = (id: string) => ({ panes: [id], selectedId: id });
 
@@ -18,6 +26,9 @@ const session = (id: string, status: SessionStatus): SessionMeta => ({
   projectId: null,
   claudeConfigDir: null,
   sshKey: null,
+  contextDir: null,
+  attention: null,
+  worktree: null,
   notes: '',
   summaryStatus: 'none',
 });
@@ -87,5 +98,28 @@ describe('pruneLayout', () => {
   it('keeps an unchanged layout as is', () => {
     const layout = { panes: ['a', 'b'], selectedId: 'a' };
     expect(pruneLayout(layout, [session('a', 'running'), session('b', 'idle')])).toBe(layout);
+  });
+});
+
+describe('movePane', () => {
+  const layout = { panes: ['a', 'b', 'c'], selectedId: 'a' };
+
+  it('moves a pane and focuses it', () => {
+    expect(movePane(layout, 'a', 2)).toEqual({ panes: ['b', 'c', 'a'], selectedId: 'a' });
+    expect(movePane(layout, 'c', 0)).toEqual({ panes: ['c', 'a', 'b'], selectedId: 'c' });
+  });
+
+  it('keeps the index inside the split', () => {
+    expect(movePane(layout, 'b', 9).panes).toEqual(['a', 'c', 'b']);
+    expect(movePane(layout, 'a', -1)).toBe(layout);
+    expect(movePane(layout, 'z', 1)).toBe(layout);
+  });
+});
+
+describe('clampShare', () => {
+  it('keeps every pane at least a fifth of the space', () => {
+    expect(clampShare(0.05)).toBe(0.2);
+    expect(clampShare(0.95)).toBe(0.8);
+    expect(clampShare(0.6)).toBe(0.6);
   });
 });

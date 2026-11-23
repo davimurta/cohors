@@ -9,14 +9,26 @@ interface FinishedListProps {
   sessions: SessionMeta[];
   selectedId: string | null;
   home: string | null;
+  /** A search filters the list: the empty message changes. */
+  searching: boolean;
   onSelect: (id: string) => void;
 }
 
 /** Finished sessions, newest first, under a heading per day. */
-export function FinishedList({ sessions, selectedId, home, onSelect }: FinishedListProps) {
+export function FinishedList({
+  sessions,
+  selectedId,
+  home,
+  searching,
+  onSelect,
+}: FinishedListProps) {
   const now = useNow();
   if (sessions.length === 0) {
-    return <p className={styles.empty}>As sessões finalizadas aparecem aqui.</p>;
+    return (
+      <p className={styles.empty} role={searching ? 'status' : undefined}>
+        {searching ? 'Nenhuma sessão encontrada.' : 'As sessões finalizadas aparecem aqui.'}
+      </p>
+    );
   }
   const days = groupByDay(sessions, now);
 

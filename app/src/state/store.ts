@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import type { Agent, ProjectSettings } from '@cohors/protocol';
 import { DaemonClient } from '../daemon/client.ts';
-import { closePane, selectSession, toggleSplit } from './layout.ts';
+import {
+  closePane,
+  movePane,
+  selectSession,
+  toggleSplit,
+  type SplitSizes,
+} from './layout.ts';
+import { loadLayout, saveLayout } from './persist.ts';
 import {
   applyConnectionStatus,
   applyServerMessage,
@@ -21,6 +28,7 @@ export interface CreateSessionRequest {
   cwd: string;
   name: string;
   projectId: string | null;
+  worktree: boolean;
 }
 
 interface SessionsActions {
@@ -28,12 +36,16 @@ interface SessionsActions {
   /** Shows a live session next to the current ones, or takes it out. */
   toggleSplit: (id: string) => void;
   closePane: (id: string) => void;
+  /** Moves a pane of the split to another position. */
+  movePane: (id: string, index: number) => void;
+  setSplitSizes: (sizes: SplitSizes) => void;
   openNewSession: (projectId?: string) => void;
   closeNewSession: () => void;
   createSession: (request: CreateSessionRequest) => void;
   resumeSession: (id: string) => void;
   retryConnection: () => void;
   restartDaemon: () => void;
+  setDaemonOutdated: (outdated: boolean) => void;
   /** "Encerrar tudo": the daemon stops every session and exits. */
   shutdownDaemon: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
@@ -44,17 +56,32 @@ interface SessionsActions {
   openNotes: (id: string) => void;
   closeNotes: () => void;
   saveNotes: (id: string, notes: string) => void;
+  openRename: (id: string) => void;
+  closeRename: () => void;
+  renameSession: (id: string, name: string) => void;
   openTranscript: (id: string) => void;
+  loadConversation: (id: string) => void;
+  loadWorktree: (id: string) => void;
+  removeWorktree: (id: string) => void;
+  /** Runs right away; the search box debounces. */
+  searchHistory: (query: string) => void;
   closeTranscript: () => void;
   deleteSession: (id: string) => void;
   openProjectDialog: (projectId: string | null) => void;
   closeProjectDialog: () => void;
   saveProject: (settings: ProjectSettings) => void;
   deleteProject: (id: string) => void;
+  openContext: (projectId: string) => void;
+  closeContext: () => void;
+  saveContext: (rules: string, plan: string) => void;
 }
+
+const savedLayout = loadLayout();
 
 export const useAppStore = create<SessionsState & SessionsActions>()((set, get) => ({
   ...initialSessionsState,
+  restoredLayout: savedLayout,
+  splitSizes: savedLayout?.splitSizes ?? initialSessionsState.splitSizes,
   select: (id) =>
     set((state) => {
       const session = state.sessions.find((candidate) => candidate.id === id);
@@ -64,10 +91,12 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
     }),
   toggleSplit: (id) => set((state) => ({ ...toggleSplit(state, id), transcript: null })),
   closePane: (id) => set((state) => closePane(state, id)),
+  movePane: (id, index) => set((state) => movePane(state, id, index)),
+  setSplitSizes: (splitSizes) => set({ splitSizes }),
   openNewSession: (projectId) =>
     set({ newSessionOpen: true, newSessionProjectId: projectId ?? null, createError: null }),
   closeNewSession: () => set({ newSessionOpen: false, creating: false, createError: null }),
-  createSession: ({ agent, cwd, name, projectId }) => {
+  createSession: ({ agent, cwd, name, projectId, worktree }) => {
     if (get().connection !== 'ready') {
       set({ createError: 'O daemon está desconectado.' });
       return;
@@ -79,6 +108,7 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
       cwd,
       name,
       ...(projectId === null ? {} : { projectId }),
+      ...(worktree ? { worktree } : {}),
     });
   },
   resumeSession: (id) => {
@@ -91,6 +121,7 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   },
   retryConnection: () => daemon.retryNow(),
   restartDaemon: () => void daemon.restartDaemon(),
+  setDaemonOutdated: (daemonOutdated) => set({ daemonOutdated }),
   shutdownDaemon: () => daemon.send({ type: 'daemon.shutdown' }),
   setSidebarTab: (tab) =>
     set((state) => {
@@ -114,6 +145,12 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   loadSummary: (id) => {
     if (!(id in get().summaries)) daemon.send({ type: 'session.getSummary', id });
   },
+  openRename: (id) => set({ renameId: id }),
+  closeRename: () => set({ renameId: null }),
+  renameSession: (id, name) => {
+    daemon.send({ type: 'session.rename', id, name });
+    set({ renameId: null });
+  },
   openNotes: (id) => set({ notesId: id }),
   closeNotes: () => set({ notesId: null }),
   saveNotes: (id, notes) => {
@@ -125,6 +162,35 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
     daemon.send({ type: 'session.transcript', id });
   },
   closeTranscript: () => set({ transcript: null }),
+  loadConversation: (id) => {
+    if (!(id in get().conversations)) daemon.send({ type: 'session.conversation', id });
+  },
+  loadWorktree: (id) => {
+    set((state) => ({
+      worktrees: {
+        ...state.worktrees,
+        [id]: state.worktrees[id] ?? { status: null, removing: false, branchDeleted: null, error: null },
+      },
+    }));
+    daemon.send({ type: 'session.worktree.status', id });
+  },
+  removeWorktree: (id) => {
+    const current = get().worktrees[id];
+    if (current === undefined || current.removing) return;
+    set((state) => ({
+      worktrees: { ...state.worktrees, [id]: { ...current, removing: true, error: null } },
+    }));
+    daemon.send({ type: 'session.worktree.remove', id });
+  },
+  searchHistory: (query) => {
+    if (query.trim() === '') {
+      set({ historySearch: null });
+      return;
+    }
+    // The previous matches stay on screen until the new ones arrive.
+    set({ historySearch: { query, ids: get().historySearch?.ids ?? null } });
+    daemon.send({ type: 'session.search', query });
+  },
   deleteSession: (id) => daemon.send({ type: 'session.delete', id }),
   openProjectDialog: (projectId) => {
     // Accounts and keys may have changed since the app started.
@@ -144,6 +210,17 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   deleteProject: (id) => {
     set({ projectDialog: null });
     daemon.send({ type: 'project.delete', id });
+  },
+  openContext: (projectId) => {
+    set({ contextEditor: { projectId, files: null, saving: false, error: null } });
+    daemon.send({ type: 'project.context.get', id: projectId });
+  },
+  closeContext: () => set({ contextEditor: null }),
+  saveContext: (rules, plan) => {
+    const editor = get().contextEditor;
+    if (editor === null || editor.saving) return;
+    set({ contextEditor: { ...editor, saving: true, error: null } });
+    daemon.send({ type: 'project.context.save', id: editor.projectId, rules, plan });
   },
 }));
 
@@ -167,3 +244,20 @@ export function startDaemonSync(): () => void {
     daemon.stop();
   };
 }
+
+// Remembers the view for the next start, once the saved one was applied.
+useAppStore.subscribe((state, previous) => {
+  if (state.restoredLayout !== null) return;
+  const changed =
+    state.panes !== previous.panes ||
+    state.selectedId !== previous.selectedId ||
+    state.sidebarTab !== previous.sidebarTab ||
+    state.splitSizes !== previous.splitSizes;
+  if (!changed) return;
+  saveLayout({
+    panes: state.panes,
+    selectedId: state.selectedId,
+    sidebarTab: state.sidebarTab,
+    splitSizes: state.splitSizes,
+  });
+});

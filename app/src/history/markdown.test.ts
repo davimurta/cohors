@@ -9,6 +9,23 @@ describe('parseMarkdown', () => {
     expect(list?.kind === 'list' && list.items.length).toBe(2);
   });
 
+  it('keeps code blocks verbatim, even when cut off', () => {
+    expect(parseMarkdown('Rode:\n```sh\n  npm test\n# done\n```\nOk')).toEqual([
+      { kind: 'paragraph', content: [{ kind: 'text', text: 'Rode:' }] },
+      { kind: 'code', text: '  npm test\n# done' },
+      { kind: 'paragraph', content: [{ kind: 'text', text: 'Ok' }] },
+    ]);
+    expect(parseMarkdown('```\nfn main()')).toEqual([{ kind: 'code', text: 'fn main()' }]);
+  });
+
+  it('separates numbered lists from bullet lists', () => {
+    const blocks = parseMarkdown('1. Um\n2) Dois\n- Solto');
+    expect(blocks.map((block) => block.kind === 'list' && [block.ordered, block.items.length])).toEqual([
+      [true, 2],
+      [false, 1],
+    ]);
+  });
+
   it('keeps plain lines as paragraphs', () => {
     expect(parseMarkdown('Texto livre')).toEqual([
       { kind: 'paragraph', content: [{ kind: 'text', text: 'Texto livre' }] },

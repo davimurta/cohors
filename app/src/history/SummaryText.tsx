@@ -12,15 +12,23 @@ export function SummaryText({ markdown }: { markdown: string }) {
                 <InlineText parts={block.content} />
               </h3>
             );
-          case 'list':
+          case 'list': {
+            const List = block.ordered ? 'ol' : 'ul';
             return (
-              <ul key={index} className={styles.list}>
+              <List key={index} className={styles.list}>
                 {block.items.map((item, itemIndex) => (
                   <li key={itemIndex}>
                     <InlineText parts={item} />
                   </li>
                 ))}
-              </ul>
+              </List>
+            );
+          }
+          case 'code':
+            return (
+              <pre key={index} className={styles.codeBlock}>
+                <code>{block.text}</code>
+              </pre>
             );
           case 'paragraph':
             return (

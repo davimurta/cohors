@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project, SessionMeta } from '@cohors/protocol';
-import { groupSessions } from './groupSessions.ts';
+import { groupSessions, sidebarOrder } from './groupSessions.ts';
 
 const project = (id: string): Project => ({
   id,
@@ -8,6 +8,7 @@ const project = (id: string): Project => ({
   root: `/dev/${id}`,
   claudeConfigDir: null,
   sshKey: null,
+  contextDir: null,
 });
 
 const session = (id: string, projectId: string | null): SessionMeta => ({
@@ -24,6 +25,9 @@ const session = (id: string, projectId: string | null): SessionMeta => ({
   projectId,
   claudeConfigDir: null,
   sshKey: null,
+  contextDir: null,
+  attention: null,
+  worktree: null,
   notes: '',
   summaryStatus: 'none',
 });
@@ -54,5 +58,16 @@ describe('groupSessions', () => {
       ['p1', []],
       [null, ['a']],
     ]);
+  });
+});
+
+describe('sidebarOrder', () => {
+  it('lists active sessions project by project, loose ones last', () => {
+    const finished = { ...session('done', 'p'), status: 'finished' as const };
+    const order = sidebarOrder(
+      [session('loose', null), session('in-q', 'q'), finished, session('in-p', 'p')],
+      [project('p'), project('q')],
+    );
+    expect(order.map((entry) => entry.id)).toEqual(['in-p', 'in-q', 'loose']);
   });
 });

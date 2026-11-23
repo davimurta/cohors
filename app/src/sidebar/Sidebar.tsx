@@ -8,6 +8,7 @@ import { useHomeDir } from '../session/useHomeDir.ts';
 import { inTab, type SidebarTab } from '../state/sessions.ts';
 import { useAppStore } from '../state/store.ts';
 import { FinishedList } from './FinishedList.tsx';
+import { HistorySearch } from './HistorySearch.tsx';
 import { SessionList } from './SessionList.tsx';
 import { ShutdownAllButton } from './ShutdownAllButton.tsx';
 import styles from './Sidebar.module.css';
@@ -84,6 +85,10 @@ function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps)
   const setTab = useAppStore((state) => state.setSidebarTab);
   const active = sessions.filter((session) => inTab(session, 'active'));
   const finished = sessions.filter((session) => inTab(session, 'finished'));
+  const search = useAppStore((state) => state.historySearch);
+  const matches = search?.ids === null || search === null ? null : new Set(search.ids);
+  const shownFinished =
+    matches === null ? finished : finished.filter((session) => matches.has(session.id));
   const tabs: { id: SidebarTab; label: string; count: number }[] = [
     { id: 'active', label: 'Ativas', count: active.length },
     { id: 'finished', label: 'Finalizadas', count: finished.length },
@@ -126,12 +131,16 @@ function SessionsNav({ sessions, selectedId, home, onSelect }: SessionsNavProps)
         {tab === 'active' ? (
           <SessionList sessions={active} selectedId={selectedId} home={home} onSelect={onSelect} />
         ) : (
-          <FinishedList
-            sessions={finished}
-            selectedId={selectedId}
-            home={home}
-            onSelect={onSelect}
-          />
+          <>
+            {finished.length > 0 && <HistorySearch finishedCount={finished.length} />}
+            <FinishedList
+              sessions={shownFinished}
+              selectedId={selectedId}
+              home={home}
+              searching={search !== null}
+              onSelect={onSelect}
+            />
+          </>
         )}
       </div>
     </>

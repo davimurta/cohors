@@ -9,6 +9,7 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Opening the app from the system launcher (not a terminal) still finds `claude` (the empty state shows no "Claude Code não encontrado" note).
 - [ ] "Encerrar tudo" interrupts every session and the app comes back with them as Interrompida.
 - [ ] Killing the daemon process shows the error screen; "Tentar de novo" and "Reiniciar daemon" recover.
+- [ ] After rebuilding or updating the app while the old daemon keeps running, a banner offers "Reiniciar daemon"; "Agora não" hides it until the next outdated daemon, and restarting brings the sessions back as Interrompida.
 
 ## Sessions
 
@@ -18,17 +19,41 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Restarting the computer: sessions come back as Interrompida and a Claude session resumes its conversation.
 - [ ] A quiet session turns Ociosa after about 10 seconds and back to Rodando on output.
 - [ ] Cmd+click (Ctrl+click) shows up to four terminals side by side; typing goes to the focused one.
+- [ ] In a split, dragging a divider resizes columns and rows (double click or Enter evens them out); dragging a pane by its grip onto another swaps their places, and the grip's arrow keys do the same.
+- [ ] Reopening the app brings back the split, its sizes and the focused session; sessions that ended meanwhile are left out.
+- [ ] Cmd+1 to Cmd+9 (Ctrl elsewhere) open the active sessions in sidebar order, also from a focused terminal.
+- [ ] Cmd+W (Ctrl+Shift+W elsewhere) closes the focused pane of a split and does nothing with a single pane; Shift+Cmd+W closes the window on macOS. Copy and paste still work in dialogs and terminals.
+- [ ] Renaming from the pencil next to the title, or a double click in the sidebar, updates every open window.
+- [ ] When Claude finishes an answer or asks for a permission, its session shows "Aguardando você" and, if it is not on screen or the window is in the background, a system notification appears (macOS asks for permission once). Typing in the session clears the mark.
 
 ## Projects
 
 - [ ] A project with another Claude account opens Claude logged into that account.
 - [ ] A project with an SSH key makes `git fetch` in its shells use that key.
+- [ ] Rules and plan saved in "Regras e plano" reach a new Claude session of the project (ask Claude what the rules say), and an edit made between sessions reaches the session after Retomar.
+- [ ] With a context folder of your own, the files are written there and "Mostrar pasta" opens it.
+
+## Worktrees
+
+- [ ] "Isolar em worktree" on a git repository starts the session in a new folder on a `cohors/...` branch, shown in the header; a folder outside git shows an error.
+- [ ] After finishing, the Worktree card blocks removal while there are uncommitted changes, removes a clean worktree with its branch when it has no new commits, and keeps the branch when it has.
+- [ ] Windows: paths with spaces and the removal work (git for Windows in PATH).
+
+## Other agents
+
+- [ ] Nova sessão disables Codex and Gemini when their CLI is not in PATH, and enables them after installing and restarting the daemon.
+- [ ] A Codex session starts `codex`; after Encerrar and Retomar it continues the same conversation (`codex resume --last`).
+- [ ] A Gemini session starts `gemini`; Retomar continues the same conversation (`gemini --resume latest`).
+- [ ] Two Codex sessions in the same folder: resuming the older one opens the newer conversation (known limit). With worktrees each resumes its own.
 
 ## Finish and history
 
 - [ ] Finalizar on a Claude session shows the progress screen and then the summary.
 - [ ] A summary failure offers Tentar de novo and Finalizar sem resumo.
-- [ ] Copiar resumo copies the text; Ver transcript shows the session output; Excluir removes it.
+- [ ] Copiar resumo copies the text; Excluir removes the session.
+- [ ] Ver transcript of a Claude session opens on Conversa (your prompts, Claude's answers with code blocks, one line per tool) and Terminal shows the raw output; a shell only has Terminal.
+- [ ] Detalhes of a finished Claude session shows the model and token counts.
+- [ ] The search box in Finalizadas finds sessions by name, notes, summary and conversation text; Esc clears it.
 
 ## Accessibility
 
@@ -39,5 +64,5 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 
 ## Platform notes
 
-- **Windows**: sessions run under ConPTY; check that `claude` and PowerShell start, that resize works, and that "Encerrar tudo" ends child processes. Stopping the daemon from outside is a hard kill there, so sessions come back as Interrompida.
+- **Windows**: the project context hook runs through Claude Code's shell (Git Bash); check that the rules reach a Claude session. Sessions run under ConPTY; check that `claude` and PowerShell start, that resize works, and that "Encerrar tudo" ends child processes. Stopping the daemon from outside is a hard kill there, so sessions come back as Interrompida.
 - **Linux**: check under both X11 and Wayland; the app needs WebKitGTK 4.1.
