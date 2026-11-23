@@ -1,4 +1,5 @@
 import type {
+  Agent,
   ClaudeAccount,
   ConversationEntry,
   ErrorCode,
@@ -59,6 +60,8 @@ export interface SessionsState {
   connectionDetail: string | null;
   /** Unknown until the daemon handshake completes. */
   claudeAvailable: boolean | null;
+  /** Agent commands the daemon found; null until the handshake. */
+  availableAgents: Agent[] | null;
   /** Build of the running daemon, from the handshake. */
   daemonBuildId: string | null;
   /** The running daemon is another build than the one this app starts. */
@@ -108,6 +111,7 @@ export const initialSessionsState: SessionsState = {
   connection: 'connecting',
   connectionDetail: null,
   claudeAvailable: null,
+  availableAgents: null,
   daemonBuildId: null,
   daemonOutdated: false,
   sessions: [],
@@ -140,7 +144,7 @@ export const initialSessionsState: SessionsState = {
 
 const CREATE_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   invalid_cwd: 'Essa pasta não existe. Escolha outra.',
-  agent_not_found: 'Claude Code não encontrado. Instale o CLI ou escolha Shell.',
+  agent_not_found: 'Esse agente não foi encontrado neste computador. Instale o CLI ou escolha outro.',
   not_a_repository: 'Essa pasta não está num repositório git. Desmarque a worktree ou escolha outra.',
   no_commits: 'O repositório ainda não tem commits, então não dá para criar a worktree.',
   git_failed: 'O git não conseguiu criar a worktree.',
@@ -149,7 +153,7 @@ const CREATE_ERROR_FALLBACK = 'Não foi possível criar a sessão.';
 
 const RESUME_ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   invalid_cwd: 'A pasta desta sessão não existe mais.',
-  agent_not_found: 'Claude Code não encontrado. Instale o CLI para retomar esta sessão.',
+  agent_not_found: 'Esse agente não foi encontrado neste computador. Instale o CLI para retomar esta sessão.',
 };
 const RESUME_ERROR_FALLBACK = 'Não foi possível retomar a sessão.';
 
@@ -194,6 +198,7 @@ function reduce(state: SessionsState, message: ServerMessage): SessionsState {
       return {
         ...state,
         claudeAvailable: message.claudeAvailable,
+        availableAgents: message.availableAgents,
         daemonBuildId: message.buildId,
         daemonOutdated: false,
       };

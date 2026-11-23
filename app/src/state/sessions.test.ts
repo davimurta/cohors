@@ -37,7 +37,7 @@ const withSessions = (ids: string[], overrides: Partial<SessionsState> = {}): Se
 });
 
 describe('applyServerMessage', () => {
-  it('records claude availability and the daemon build on ready', () => {
+  it('records the available agents and the daemon build on ready', () => {
     const state = applyServerMessage(
       { ...initialSessionsState, daemonOutdated: true },
       {
@@ -50,6 +50,7 @@ describe('applyServerMessage', () => {
       },
     );
     expect(state.claudeAvailable).toBe(false);
+    expect(state.availableAgents).toEqual(['codex']);
     expect(state.daemonBuildId).toBe('abc');
     // A new handshake is checked again from scratch.
     expect(state.daemonOutdated).toBe(false);
