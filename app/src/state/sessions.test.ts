@@ -46,6 +46,7 @@ describe('applyServerMessage', () => {
         daemonVersion: '0.1.0',
         buildId: 'abc',
         claudeAvailable: false,
+        availableAgents: ['codex'],
       },
     );
     expect(state.claudeAvailable).toBe(false);

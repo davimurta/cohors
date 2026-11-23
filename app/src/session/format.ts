@@ -2,6 +2,8 @@ import type { Agent } from '@cohors/protocol';
 
 export const AGENT_LABEL: Record<Agent, string> = {
   claude: 'Claude',
+  codex: 'Codex',
+  gemini: 'Gemini',
   shell: 'Shell',
 };
 

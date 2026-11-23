@@ -164,6 +164,7 @@ async fn handshake(sink: &mut Sink, source: &mut Source, state: &DaemonState) ->
                     daemon_version: DAEMON_VERSION,
                     build_id: build_id::current(),
                     claude_available: state.sessions.claude_available(),
+                    available_agents: state.sessions.available_agents(),
                 }
             }
         }

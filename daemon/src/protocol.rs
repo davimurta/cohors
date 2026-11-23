@@ -147,7 +147,26 @@ pub struct SshKey {
 #[serde(rename_all = "lowercase")]
 pub enum Agent {
     Claude,
+    /// OpenAI Codex CLI.
+    Codex,
+    /// Google Gemini CLI.
+    Gemini,
     Shell,
+}
+
+impl Agent {
+    /// The agents Cohors starts as their own program, in display order.
+    pub const PROGRAMS: [Self; 3] = [Self::Claude, Self::Codex, Self::Gemini];
+
+    /// Command looked up in PATH; None for a plain shell.
+    pub fn command(self) -> Option<&'static str> {
+        match self {
+            Self::Claude => Some("claude"),
+            Self::Codex => Some("codex"),
+            Self::Gemini => Some("gemini"),
+            Self::Shell => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -254,6 +273,8 @@ pub enum ServerMessage {
         /// Hash of the daemon binary; see `build_id`.
         build_id: &'static str,
         claude_available: bool,
+        /// Agents whose command is in the daemon's PATH.
+        available_agents: Vec<Agent>,
     },
     #[serde(rename = "session.list.result")]
     SessionListResult { sessions: Vec<SessionMeta> },
@@ -470,6 +491,7 @@ mod tests {
             daemon_version: "0.1.0",
             build_id: "cbf29ce484222325",
             claude_available: true,
+            available_agents: vec![Agent::Claude, Agent::Gemini],
         })
         .expect("serialize");
         assert_eq!(
@@ -479,7 +501,8 @@ mod tests {
                 "protocolVersion": 1,
                 "daemonVersion": "0.1.0",
                 "buildId": "cbf29ce484222325",
-                "claudeAvailable": true
+                "claudeAvailable": true,
+                "availableAgents": ["claude", "gemini"]
             })
         );
     }

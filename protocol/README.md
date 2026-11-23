@@ -12,15 +12,15 @@ The first client message must be `hello` within 5 seconds:
 { "type": "hello", "token": "<token>", "protocolVersion": 2 }
 ```
 
-The daemon answers `ready` with its versions, a `buildId` (a hash of its own binary, which `cohors-daemon --build-id` also prints, so the app can tell a daemon left over from an older build) and whether `claude` is in its PATH (`claudeAvailable`), or `error` (`unauthorized`, `unsupported_protocol`) and closes the connection.
+The daemon answers `ready` with its versions, a `buildId` (a hash of its own binary, which `cohors-daemon --build-id` also prints, so the app can tell a daemon left over from an older build) and whether `claude` is in its PATH (`claudeAvailable`), plus every agent command found there (`availableAgents`, from `claude`, `codex` and `gemini`), or `error` (`unauthorized`, `unsupported_protocol`) and closes the connection.
 
 ## Sessions
 
 | Client message | Effect |
 | --- | --- |
 | `session.list` | Replies `session.list.result` with every session's metadata, in creation order |
-| `session.create {agent, cwd, name?}` | Starts `claude --session-id <uuid>` or the user's shell in `cwd`. Every client receives `session.created {session}`. A blank name becomes the folder name |
-| `session.resume {id}` | Restarts an `exited` or `interrupted` session: `claude --resume <agentSessionId>` or a new shell, in the same folder and under the same id. Every client receives `session.updated {session}` |
+| `session.create {agent, cwd, name?}` | Starts `claude --session-id <uuid>`, `codex`, `gemini` or the user's shell in `cwd`. Every client receives `session.created {session}`. A blank name becomes the folder name |
+| `session.resume {id}` | Restarts an `exited` or `interrupted` session: `claude --resume <agentSessionId>`, `codex resume --last`, `gemini --resume latest` or a new shell, in the same folder and under the same id. Every client receives `session.updated {session}` |
 | `session.finish {id, withSummary}` | Moves any unfinished session to `finished` and stops its process. For Claude sessions with `withSummary`, `summaryStatus` becomes `pending` and the daemon runs `claude -p --resume <agentSessionId>` with the session's folder, account and SSH key. The result is saved to `summary.md` and sent as `session.summary {id, status, text}` |
 | `session.summarize {id}` | Generates the summary again (after `failed`, or when finished without one) |
 | `session.skipSummary {id}` | Cancels a pending summary or gives up on a failed one; `summaryStatus` becomes `none` |
@@ -40,7 +40,7 @@ The daemon answers `ready` with its versions, a `buildId` (a hash of its own bin
 
 Output chunks carry a `seq` that increases by one per chunk within a session. The snapshot holds the recent output ring buffer and the `seq` of its last chunk, and the live stream continues at `seq + 1`, with no gaps or duplicates. A client that falls behind receives a fresh snapshot.
 
-Failures are reported as `error {code, message, ref?}`. `ref` is the session id when one is involved, or the request type (`session.create`) otherwise. `session.create` fails with `invalid_cwd` when the folder does not exist and `agent_not_found` when `claude` is not installed. `session.resume` fails with `invalid_state` when the session is not exited or interrupted, `session.finish` when it is already finished, and `session.delete` when it is not finished or its summary is still pending.
+Failures are reported as `error {code, message, ref?}`. `ref` is the session id when one is involved, or the request type (`session.create`) otherwise. `session.create` fails with `invalid_cwd` when the folder does not exist and `agent_not_found` when the agent's command is not in the daemon's PATH. `session.resume` fails with `invalid_state` when the session is not exited or interrupted, `session.finish` when it is already finished, and `session.delete` when it is not finished or its summary is still pending.
 
 ## Daemon lifecycle
 
@@ -77,11 +77,13 @@ A project groups sessions and gives them a root folder, a Claude account and an 
 
 Each project has a context folder with `regras.md` (rules) and `plano.md` (plan). By default it is `contexts/<projectId>` in the user data directory; `contextDir` points it at a folder of the user's choice instead. Deleting a project removes the default folder and leaves a chosen one alone.
 
-`session.create {projectId}` also stores the folder in the session as `contextDir` (creating the default one). Claude sessions start and resume with `--add-dir <contextDir>`, so Claude can read and edit the files, and `--settings` with a `SessionStart` hook that runs `cohors-daemon --print-context <contextDir>`. The hook prints both files under a short header, so Claude gets the current text on every start, resume and compaction. Blank files print nothing. When the folder no longer exists the context is left out. Shells ignore the context.
+`session.create {projectId}` also stores the folder in the session as `contextDir` (creating the default one). Claude sessions start and resume with `--add-dir <contextDir>`, so Claude can read and edit the files, and `--settings` with a `SessionStart` hook that runs `cohors-daemon --print-context <contextDir>`. The hook prints both files under a short header, so Claude gets the current text on every start, resume and compaction. Blank files print nothing. When the folder no longer exists the context is left out. Shells, Codex and Gemini ignore the context.
 
 ### Waiting for the user
 
-Claude sessions also get hooks that run `cohors-daemon --attention <state>`: `Stop` reports `done`, `Notification` reports `input` and `UserPromptSubmit` reports `clear`. The hook finds its session through `COHORS_SESSION_ID`, set in every session process, and writes the state to `sessions/<id>/attention`. The daemon checks those files every 2 seconds and sets `attention` in the session (`done`, `input` or null), announced with `session.updated`. A session already waiting keeps its first reason. `session.input`, resume, exit and finish clear it. The hook prints nothing and never fails.
+Claude sessions also get hooks that run `cohors-daemon --attention <state>`: `Stop` reports `done`, `Notification` reports `input` and `UserPromptSubmit` reports `clear`. The hook finds its session through `COHORS_SESSION_ID`, set in every session process, and writes the state to `sessions/<id>/attention`. The daemon checks those files every 2 seconds and sets `attention` in the session (`done`, `input` or null), announced with `session.updated`. A session already waiting keeps its first reason. `session.input`, resume, exit and finish clear it. The hook prints nothing and never fails. Codex and Gemini sessions get no hooks, so they never set `attention`.
+
+Codex and Gemini choose their own conversation ids, so `agentSessionId` stays null and resuming takes the most recent conversation in the session's folder. Two such sessions in one folder can resume each other's conversation; a worktree gives each its own folder.
 
 ## Terminal state on attach
 

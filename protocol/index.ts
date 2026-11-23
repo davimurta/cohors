@@ -2,7 +2,7 @@
 
 export const PROTOCOL_VERSION = 2;
 
-export type Agent = 'claude' | 'shell';
+export type Agent = 'claude' | 'codex' | 'gemini' | 'shell';
 
 /**
  * `idle`: running without output for a while. `exited`: the process ended on
@@ -168,6 +168,8 @@ export type ServerMessage =
       /** Hash of the daemon binary, also printed by `cohors-daemon --build-id`. */
       buildId: string;
       claudeAvailable: boolean;
+      /** Agents whose command is in the daemon's PATH (never `shell`). */
+      availableAgents: Agent[];
     }
   | { type: 'session.list.result'; sessions: SessionMeta[] }
   | { type: 'session.created'; session: SessionMeta }

@@ -21,7 +21,6 @@ use crate::store::SessionStore;
 use crate::summary;
 use crate::worktree::{Git, RemovedBranch, WorktreeError, WorktreeStatus};
 
-const CLAUDE_COMMAND: &str = "claude";
 const EVENT_QUEUE: usize = 256;
 const RESUME_SEPARATOR: &str = "\r\n\x1b[2m--- sessão retomada ---\x1b[0m\r\n";
 /// How long processes get to exit on their own before a hard kill.
@@ -37,8 +36,8 @@ const TRANSCRIPT_VIEW_BYTES: u64 = 2 * 1024 * 1024;
 pub enum SessionsError {
     #[error("folder does not exist: {0}")]
     InvalidCwd(String),
-    #[error("claude was not found in PATH")]
-    AgentNotFound,
+    #[error("{0} was not found in PATH")]
+    AgentNotFound(&'static str),
     #[error("session not found")]
     NotFound,
     #[error("session is {0:?}")]
@@ -63,7 +62,7 @@ impl SessionsError {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidCwd(_) => ErrorCode::InvalidCwd,
-            Self::AgentNotFound => ErrorCode::AgentNotFound,
+            Self::AgentNotFound(_) => ErrorCode::AgentNotFound,
             Self::NotFound => ErrorCode::SessionNotFound,
             Self::InvalidState(_) => ErrorCode::InvalidState,
             Self::EmptyName | Self::NoWorktree => ErrorCode::BadRequest,
@@ -178,7 +177,8 @@ impl Sessions {
         let chosen = existing_dir(&request.cwd)?;
         let agent_session_id = match request.agent {
             Agent::Claude => Some(Uuid::new_v4().to_string()),
-            Agent::Shell => None,
+            // Codex and Gemini pick their own ids; see `launch_for`.
+            Agent::Codex | Agent::Gemini | Agent::Shell => None,
         };
         let id = Uuid::new_v4().to_string();
         let name = session_name(request.name.as_deref(), &chosen);
@@ -270,7 +270,18 @@ impl Sessions {
     }
 
     pub fn claude_available(&self) -> bool {
-        executable::find_in(&self.path, CLAUDE_COMMAND).is_some()
+        self.available_agents().contains(&Agent::Claude)
+    }
+
+    pub fn available_agents(&self) -> Vec<Agent> {
+        Agent::PROGRAMS
+            .into_iter()
+            .filter(|agent| {
+                agent
+                    .command()
+                    .is_some_and(|command| executable::find_in(&self.path, command).is_some())
+            })
+            .collect()
     }
 
     /// Ends every process for "Encerrar tudo" or a daemon stop. Sessions are
@@ -715,16 +726,27 @@ fn launch_for(
     cwd: &Path,
     resume: bool,
 ) -> Result<Launch, SessionsError> {
-    let (program, args) = match (meta.agent, meta.agent_session_id.as_deref()) {
+    let args = match (meta.agent, meta.agent_session_id.as_deref()) {
         (Agent::Claude, Some(id)) => {
-            let program =
-                executable::find_in(path, CLAUDE_COMMAND).ok_or(SessionsError::AgentNotFound)?;
             let flag = if resume { "--resume" } else { "--session-id" };
             let mut args = vec![flag.to_owned(), id.to_owned()];
             args.extend(hook_args(meta));
-            (Some(program.to_string_lossy().into_owned()), args)
+            args
         }
-        _ => (None, Vec::new()),
+        // Neither CLI lets the caller pick a session id, so resuming takes
+        // the most recent conversation of the session's folder.
+        (Agent::Codex, _) if resume => vec!["resume".to_owned(), "--last".to_owned()],
+        (Agent::Gemini, _) if resume => vec!["--resume".to_owned(), "latest".to_owned()],
+        _ => Vec::new(),
+    };
+    let program = match meta.agent.command() {
+        Some(command) => Some(
+            executable::find_in(path, command)
+                .ok_or(SessionsError::AgentNotFound(command))?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
     };
     Ok(Launch {
         program,
@@ -887,6 +909,78 @@ mod tests {
         assert_eq!(launch.args[..3], ["--resume", "abc", "--settings"]);
     }
 
+    /// A PATH with executable stubs named after `commands`.
+    #[cfg(unix)]
+    fn fake_path(root: &Path, commands: &[&str]) -> std::ffi::OsString {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        for command in commands {
+            let file = bin.join(command);
+            std::fs::write(&file, "#!/bin/sh\n").expect("stub");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        bin.into_os_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_and_gemini_resume_the_latest_conversation() {
+        let root = temp_root();
+        let path = fake_path(&root, &["codex", "gemini"]);
+        let cwd = Path::new("/tmp");
+        for (agent, resume_args) in [
+            (Agent::Codex, ["resume", "--last"]),
+            (Agent::Gemini, ["--resume", "latest"]),
+        ] {
+            let meta = SessionMeta { agent, ..meta("s") };
+            let start = launch_for(&path, &meta, cwd, false).expect("start");
+            assert!(
+                start
+                    .program
+                    .expect("program")
+                    .ends_with(agent.command().expect("command"))
+            );
+            assert!(start.args.is_empty());
+            let resume = launch_for(&path, &meta, cwd, true).expect("resume");
+            assert_eq!(resume.args, resume_args);
+        }
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_agent_is_reported_by_name() {
+        let root = temp_root();
+        let path = fake_path(&root, &["gemini"]);
+        let codex = SessionMeta {
+            agent: Agent::Codex,
+            ..meta("s")
+        };
+        assert!(matches!(
+            launch_for(&path, &codex, Path::new("/tmp"), false),
+            Err(SessionsError::AgentNotFound("codex"))
+        ));
+        let shell = launch_for(&path, &meta("s"), Path::new("/tmp"), false).expect("shell");
+        assert!(shell.program.is_none());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn available_agents_follow_the_path() {
+        let root = temp_root();
+        let path = fake_path(&root, &["gemini", "claude"]);
+        let sessions = Sessions::load(
+            SessionStore::new(root.join("data")),
+            path,
+            root.join("worktrees"),
+        );
+        assert_eq!(sessions.available_agents(), [Agent::Claude, Agent::Gemini]);
+        assert!(sessions.claude_available());
+        std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
     #[test]
     fn claude_gets_the_context_folder_while_it_exists() {
         let dir = temp_root();
@@ -1011,7 +1105,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).expect("bin");
-        let script = bin.join(CLAUDE_COMMAND);
+        let script = bin.join("claude");
         std::fs::write(&script, "#!/bin/sh\nexec /bin/sleep 30\n").expect("script");
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         let sessions = Sessions::load(
