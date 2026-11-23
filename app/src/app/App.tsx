@@ -13,6 +13,8 @@ import { MainView } from './MainView.tsx';
 import { useAttentionNotifications } from './useAttentionNotifications.ts';
 import { useNewSessionShortcut } from './useNewSessionShortcut.ts';
 import { useSessionShortcuts } from './useSessionShortcuts.ts';
+import { useDaemonBuildCheck } from './useDaemonBuildCheck.ts';
+import { OutdatedDaemonBanner } from './OutdatedDaemonBanner.tsx';
 
 export function App() {
   const connection = useAppStore((state) => state.connection);
@@ -21,6 +23,7 @@ export function App() {
   useNewSessionShortcut();
   useAttentionNotifications();
   useSessionShortcuts();
+  useDaemonBuildCheck();
 
   useEffect(() => {
     const stopRouting = startTerminalRouting();
@@ -37,7 +40,10 @@ export function App() {
       {daemonDown ? (
         <DaemonErrorScreen incompatible={connection === 'incompatible'} />
       ) : (
-        <MainView />
+        <div className={styles.content}>
+          <OutdatedDaemonBanner />
+          <MainView />
+        </div>
       )}
       <NewSessionDialog />
       <ProjectDialog />

@@ -45,6 +45,7 @@ interface SessionsActions {
   resumeSession: (id: string) => void;
   retryConnection: () => void;
   restartDaemon: () => void;
+  setDaemonOutdated: (outdated: boolean) => void;
   /** "Encerrar tudo": the daemon stops every session and exits. */
   shutdownDaemon: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
@@ -120,6 +121,7 @@ export const useAppStore = create<SessionsState & SessionsActions>()((set, get) 
   },
   retryConnection: () => daemon.retryNow(),
   restartDaemon: () => void daemon.restartDaemon(),
+  setDaemonOutdated: (daemonOutdated) => set({ daemonOutdated }),
   shutdownDaemon: () => daemon.send({ type: 'daemon.shutdown' }),
   setSidebarTab: (tab) =>
     set((state) => {

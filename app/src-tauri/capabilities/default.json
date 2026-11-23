@@ -34,7 +34,7 @@
           "sidecar": true,
           "args": [
             {
-              "validator": "^--(detach|stop)$"
+              "validator": "^--(detach|stop|build-id)$"
             }
           ]
         }

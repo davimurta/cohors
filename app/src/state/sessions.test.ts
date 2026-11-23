@@ -37,14 +37,21 @@ const withSessions = (ids: string[], overrides: Partial<SessionsState> = {}): Se
 });
 
 describe('applyServerMessage', () => {
-  it('records claude availability on ready', () => {
-    const state = applyServerMessage(initialSessionsState, {
-      type: 'ready',
-      protocolVersion: 1,
-      daemonVersion: '0.1.0',
-      claudeAvailable: false,
-    });
+  it('records claude availability and the daemon build on ready', () => {
+    const state = applyServerMessage(
+      { ...initialSessionsState, daemonOutdated: true },
+      {
+        type: 'ready',
+        protocolVersion: 2,
+        daemonVersion: '0.1.0',
+        buildId: 'abc',
+        claudeAvailable: false,
+      },
+    );
     expect(state.claudeAvailable).toBe(false);
+    expect(state.daemonBuildId).toBe('abc');
+    // A new handshake is checked again from scratch.
+    expect(state.daemonOutdated).toBe(false);
   });
 
   it('selects the first session when nothing is selected', () => {

@@ -59,6 +59,10 @@ export interface SessionsState {
   connectionDetail: string | null;
   /** Unknown until the daemon handshake completes. */
   claudeAvailable: boolean | null;
+  /** Build of the running daemon, from the handshake. */
+  daemonBuildId: string | null;
+  /** The running daemon is another build than the one this app starts. */
+  daemonOutdated: boolean;
   sessions: SessionMeta[];
   /** The focused session; always one of `panes` when any is shown. */
   selectedId: string | null;
@@ -104,6 +108,8 @@ export const initialSessionsState: SessionsState = {
   connection: 'connecting',
   connectionDetail: null,
   claudeAvailable: null,
+  daemonBuildId: null,
+  daemonOutdated: false,
   sessions: [],
   selectedId: null,
   panes: [],
@@ -185,7 +191,12 @@ export function syncLayout(state: SessionsState): SessionsState {
 function reduce(state: SessionsState, message: ServerMessage): SessionsState {
   switch (message.type) {
     case 'ready':
-      return { ...state, claudeAvailable: message.claudeAvailable };
+      return {
+        ...state,
+        claudeAvailable: message.claudeAvailable,
+        daemonBuildId: message.buildId,
+        daemonOutdated: false,
+      };
     case 'session.list.result': {
       const restored = state.restoredLayout;
       if (restored === null) {
