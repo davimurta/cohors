@@ -161,7 +161,14 @@ export type ClientMessage =
   | { type: 'project.context.save'; id: string; rules: string; plan: string };
 
 export type ServerMessage =
-  | { type: 'ready'; protocolVersion: number; daemonVersion: string; claudeAvailable: boolean }
+  | {
+      type: 'ready';
+      protocolVersion: number;
+      daemonVersion: string;
+      /** Hash of the daemon binary, also printed by `cohors-daemon --build-id`. */
+      buildId: string;
+      claudeAvailable: boolean;
+    }
   | { type: 'session.list.result'; sessions: SessionMeta[] }
   | { type: 'session.created'; session: SessionMeta }
   | { type: 'session.updated'; session: SessionMeta }

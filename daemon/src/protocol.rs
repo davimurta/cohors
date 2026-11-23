@@ -251,6 +251,8 @@ pub enum ServerMessage {
     Ready {
         protocol_version: u32,
         daemon_version: &'static str,
+        /// Hash of the daemon binary; see `build_id`.
+        build_id: &'static str,
         claude_available: bool,
     },
     #[serde(rename = "session.list.result")]
@@ -466,6 +468,7 @@ mod tests {
         let value = serde_json::to_value(ServerMessage::Ready {
             protocol_version: 1,
             daemon_version: "0.1.0",
+            build_id: "cbf29ce484222325",
             claude_available: true,
         })
         .expect("serialize");
@@ -475,6 +478,7 @@ mod tests {
                 "type": "ready",
                 "protocolVersion": 1,
                 "daemonVersion": "0.1.0",
+                "buildId": "cbf29ce484222325",
                 "claudeAvailable": true
             })
         );

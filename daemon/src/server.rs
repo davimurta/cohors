@@ -16,6 +16,7 @@ use tokio_tungstenite::{WebSocketStream, accept_hdr_async};
 
 use crate::accounts;
 use crate::auth::{origin_allowed, token_matches};
+use crate::build_id;
 use crate::context::ContextFiles;
 use crate::projects::{Projects, ProjectsError};
 use crate::protocol::SummaryStatus;
@@ -161,6 +162,7 @@ async fn handshake(sink: &mut Sink, source: &mut Source, state: &DaemonState) ->
                 ServerMessage::Ready {
                     protocol_version: PROTOCOL_VERSION,
                     daemon_version: DAEMON_VERSION,
+                    build_id: build_id::current(),
                     claude_available: state.sessions.claude_available(),
                 }
             }

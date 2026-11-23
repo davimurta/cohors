@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod auth;
+pub mod build_id;
 pub mod context;
 pub mod control;
 pub mod conversation;

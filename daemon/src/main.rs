@@ -11,11 +11,10 @@ use cohors_daemon::projects::Projects;
 use cohors_daemon::server::{self, DaemonState};
 use cohors_daemon::sessions::Sessions;
 use cohors_daemon::store::SessionStore;
-use cohors_daemon::{context, control, hooks, instance, login_path};
+use cohors_daemon::{build_id, context, control, hooks, instance, login_path};
 use tokio::net::TcpListener;
 
-const USAGE: &str =
-    "usage: cohors-daemon [--detach | --stop | --print-context <dir> | --attention <state>]";
+const USAGE: &str = "usage: cohors-daemon [--detach | --stop | --build-id | --print-context <dir> | --attention <state>]";
 const SESSIONS_DIR: &str = "sessions";
 const WORKTREES_DIR: &str = "worktrees";
 /// How often sessions are checked for idleness and hook signals.
@@ -27,6 +26,12 @@ fn main() -> ExitCode {
         && flag == context::PRINT_FLAG
     {
         context::print(Path::new(dir));
+        return ExitCode::SUCCESS;
+    }
+    if let [flag] = args.as_slice()
+        && flag == build_id::FLAG
+    {
+        println!("{}", build_id::current());
         return ExitCode::SUCCESS;
     }
     if let [flag, state] = args.as_slice()
@@ -70,6 +75,9 @@ fn run(data_dir: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 async fn serve(data_dir: &Path) -> Result<(), Box<dyn Error>> {
+    // Hashed before clients connect, so the first handshake does not wait.
+    let build = build_id::current();
+    eprintln!("build {build}");
     let path = login_path::resolve(std::env::var_os("PATH")).await;
     let sessions = Sessions::load(
         SessionStore::new(data_dir.join(SESSIONS_DIR)),

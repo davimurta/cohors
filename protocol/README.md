@@ -12,7 +12,7 @@ The first client message must be `hello` within 5 seconds:
 { "type": "hello", "token": "<token>", "protocolVersion": 2 }
 ```
 
-The daemon answers `ready` with its versions and whether `claude` is in its PATH (`claudeAvailable`), or `error` (`unauthorized`, `unsupported_protocol`) and closes the connection.
+The daemon answers `ready` with its versions, a `buildId` (a hash of its own binary, which `cohors-daemon --build-id` also prints, so the app can tell a daemon left over from an older build) and whether `claude` is in its PATH (`claudeAvailable`), or `error` (`unauthorized`, `unsupported_protocol`) and closes the connection.
 
 ## Sessions
 
