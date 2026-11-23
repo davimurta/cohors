@@ -39,6 +39,13 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] After finishing, the Worktree card blocks removal while there are uncommitted changes, removes a clean worktree with its branch when it has no new commits, and keeps the branch when it has.
 - [ ] Windows: paths with spaces and the removal work (git for Windows in PATH).
 
+## Other agents
+
+- [ ] Nova sessão disables Codex and Gemini when their CLI is not in PATH, and enables them after installing and restarting the daemon.
+- [ ] A Codex session starts `codex`; after Encerrar and Retomar it continues the same conversation (`codex resume --last`).
+- [ ] A Gemini session starts `gemini`; Retomar continues the same conversation (`gemini --resume latest`).
+- [ ] Two Codex sessions in the same folder: resuming the older one opens the newer conversation (known limit). With worktrees each resumes its own.
+
 ## Finish and history
 
 - [ ] Finalizar on a Claude session shows the progress screen and then the summary.
