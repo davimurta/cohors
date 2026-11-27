@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { sidebarOrder } from '../projects/groupSessions.ts';
 import { isMac } from '../platform.ts';
 import { useAppStore } from '../state/store.ts';
+import { nextWaiting } from './attention.ts';
 
 /** Menu item event sent by the macOS menu bar for Cmd+W. */
 const CLOSE_PANE_EVENT = 'close-pane';
@@ -12,7 +13,9 @@ const CLOSE_PANE_EVENT = 'close-pane';
  * Cmd+1 to Cmd+9 (Ctrl elsewhere) open the active sessions in sidebar order.
  * Cmd+W on macOS, through the menu bar, and Ctrl+Shift+W elsewhere close the
  * focused split pane; plain Ctrl+W stays with the terminal, where shells
- * use it to delete a word. Capture phase, so the focused terminal does not
+ * use it to delete a word. Cmd+J on macOS and Ctrl+Shift+J elsewhere jump
+ * to the next session waiting for the user; plain Ctrl+J is a newline in
+ * terminals. Capture phase, so the focused terminal does not
  * get the keys first.
  */
 export function useSessionShortcuts(): void {
@@ -25,6 +28,12 @@ export function useSessionShortcuts(): void {
         event.preventDefault();
         event.stopPropagation();
         openByPosition(position);
+        return;
+      }
+      if (event.key.toLowerCase() === 'j' && event.shiftKey === !isMac) {
+        event.preventDefault();
+        event.stopPropagation();
+        openNextWaiting();
         return;
       }
       if (!isMac && event.shiftKey && event.key.toLowerCase() === 'w') {
@@ -47,6 +56,15 @@ function openByPosition(position: number): void {
   if (state.connection !== 'ready') return;
   const session = sidebarOrder(state.sessions, state.projects)[position - 1];
   if (session === undefined) return;
+  if (state.sidebarTab !== 'active') state.setSidebarTab('active');
+  state.select(session.id);
+}
+
+function openNextWaiting(): void {
+  const state = useAppStore.getState();
+  if (state.connection !== 'ready') return;
+  const session = nextWaiting(sidebarOrder(state.sessions, state.projects), state.selectedId);
+  if (session === null) return;
   if (state.sidebarTab !== 'active') state.setSidebarTab('active');
   state.select(session.id);
 }

@@ -24,3 +24,26 @@ export function newlyWaiting(
       session.attention !== null && before.get(session.id) === null && !visible(session.id),
   );
 }
+
+/**
+ * The next session waiting for the user, in sidebar order, after the
+ * selected one and wrapping around; the first waiting one when the
+ * selected session is not in the list. null when none waits, or when the
+ * only waiting session is already selected.
+ */
+export function nextWaiting(
+  ordered: SessionMeta[],
+  selectedId: string | null,
+): SessionMeta | null {
+  const start = ordered.findIndex((session) => session.id === selectedId);
+  for (let step = 1; step <= ordered.length; step++) {
+    const session = ordered[(start + step) % ordered.length];
+    if (session.attention !== null && session.id !== selectedId) return session;
+  }
+  return null;
+}
+
+/** How many sessions wait for the user, for the Dock badge. */
+export function waitingCount(sessions: SessionMeta[]): number {
+  return sessions.filter((session) => session.attention !== null).length;
+}
