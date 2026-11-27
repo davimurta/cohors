@@ -25,6 +25,8 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] Cmd+W (Ctrl+Shift+W elsewhere) closes the focused pane of a split and does nothing with a single pane; Shift+Cmd+W closes the window on macOS. Copy and paste still work in dialogs and terminals.
 - [ ] Renaming from the pencil next to the title, or a double click in the sidebar, updates every open window.
 - [ ] When Claude finishes an answer or asks for a permission, its session shows "Aguardando você" and, if it is not on screen or the window is in the background, a system notification appears (macOS asks for permission once). Typing in the session clears the mark.
+- [ ] Cmd+J (Ctrl+Shift+J elsewhere) jumps to the next session showing "Aguardando você", in sidebar order and wrapping around, also from a focused terminal. With none waiting it does nothing.
+- [ ] macOS: the Dock icon shows a badge with the number of sessions waiting, and the badge goes away when none waits.
 
 ## Projects
 
@@ -52,7 +54,7 @@ CI builds and runs the automated tests on macOS, Linux and Windows. These checks
 - [ ] A summary failure offers Tentar de novo and Finalizar sem resumo.
 - [ ] Copiar resumo copies the text; Excluir removes the session.
 - [ ] Ver transcript of a Claude session opens on Conversa (your prompts, Claude's answers with code blocks, one line per tool) and Terminal shows the raw output; a shell only has Terminal.
-- [ ] Detalhes of a finished Claude session shows the model and token counts.
+- [ ] Detalhes of a finished Claude session shows the model, token counts and Custo estimado in US$ (hover explains it is the API list price).
 - [ ] The search box in Finalizadas finds sessions by name, notes, summary and conversation text; Esc clears it.
 
 ## Accessibility
