@@ -13,6 +13,7 @@ import { MainView } from './MainView.tsx';
 import { useAttentionNotifications } from './useAttentionNotifications.ts';
 import { useNewSessionShortcut } from './useNewSessionShortcut.ts';
 import { useSessionShortcuts } from './useSessionShortcuts.ts';
+import { useDockBadge } from './useDockBadge.ts';
 import { useDaemonBuildCheck } from './useDaemonBuildCheck.ts';
 import { OutdatedDaemonBanner } from './OutdatedDaemonBanner.tsx';
 
@@ -24,6 +25,7 @@ export function App() {
   useAttentionNotifications();
   useSessionShortcuts();
   useDaemonBuildCheck();
+  useDockBadge();
 
   useEffect(() => {
     const stopRouting = startTerminalRouting();

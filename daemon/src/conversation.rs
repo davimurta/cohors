@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::pricing;
+
 const PROJECTS_DIR: &str = "projects";
 /// Longest text kept per message; longer ones end with "…".
 const MAX_TEXT_CHARS: usize = 20_000;
@@ -75,6 +77,9 @@ pub struct Usage {
     pub cache_creation_tokens: u64,
     /// Models used, in order of first use.
     pub models: Vec<String>,
+    /// Estimated cost at API list prices, in US dollars. `None` when no
+    /// request used a model with a known price.
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -152,7 +157,7 @@ pub fn read(path: &Path) -> io::Result<Conversation> {
     let mut entries = Vec::new();
     // One request can span several lines, each repeating its usage; the
     // last line has the final count.
-    let mut requests: HashMap<String, LineUsage> = HashMap::new();
+    let mut requests: HashMap<String, (LineUsage, Option<String>)> = HashMap::new();
     let mut models: Vec<String> = Vec::new();
     for line in reader.lines() {
         let Ok(line) = serde_json::from_str::<Line>(&line?) else {
@@ -171,7 +176,7 @@ pub fn read(path: &Path) -> io::Result<Conversation> {
         };
         if role == Role::Assistant {
             if let (Some(id), Some(usage)) = (&message.id, message.usage) {
-                requests.insert(id.clone(), usage);
+                requests.insert(id.clone(), (usage, message.model.clone()));
             }
             if let Some(model) = &message.model
                 && !model.starts_with('<')
@@ -198,7 +203,17 @@ pub fn read(path: &Path) -> io::Result<Conversation> {
             models,
             ..Usage::default()
         },
-        |mut total, request| {
+        |mut total, (request, model)| {
+            if let Some(price) = model.as_deref().and_then(pricing::price) {
+                let cost = pricing::cost(
+                    price,
+                    request.input_tokens,
+                    request.output_tokens,
+                    request.cache_read_input_tokens,
+                    request.cache_creation_input_tokens,
+                );
+                total.cost_usd = Some(total.cost_usd.unwrap_or(0.0) + cost);
+            }
             total.input_tokens += request.input_tokens;
             total.output_tokens += request.output_tokens;
             total.cache_read_tokens += request.cache_read_input_tokens;
@@ -337,6 +352,9 @@ mod tests {
                 cache_read_tokens: 200,
                 cache_creation_tokens: 100,
                 models: vec!["claude-opus-5-5".into()],
+                // m1: 10 in, 9 out, 100 read, 50 written; m2: 10 in, 3 out,
+                // 100 read, 50 written. Opus 5.5: $4 / $20 / $0.20 / $5.
+                cost_usd: Some((20.0 * 4.0 + 12.0 * 20.0 + 200.0 * 0.2 + 100.0 * 5.0) / 1e6),
             }
         );
         assert!(conversation.mentions("LOGIN"));

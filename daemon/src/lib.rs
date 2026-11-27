@@ -9,6 +9,7 @@ pub mod executable;
 pub mod hooks;
 pub mod instance;
 pub mod login_path;
+pub mod pricing;
 pub mod private_fs;
 pub mod process;
 pub mod projects;

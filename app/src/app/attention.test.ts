@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Attention, SessionMeta } from '@cohors/protocol';
-import { newlyWaiting } from './attention.ts';
+import { newlyWaiting, nextWaiting, waitingCount } from './attention.ts';
 
 const session = (id: string, attention: Attention | null): SessionMeta => ({
   id,
@@ -42,5 +42,36 @@ describe('newlyWaiting', () => {
   it('skips the session the user is looking at', () => {
     const result = newlyWaiting([session('a', null)], [session('a', 'done')], (id) => id === 'a');
     expect(result).toEqual([]);
+  });
+});
+
+describe('nextWaiting', () => {
+  const list = [session('a', 'done'), session('b', null), session('c', 'input'), session('d', null)];
+
+  it('goes to the next waiting session after the selected one', () => {
+    expect(nextWaiting(list, 'a')?.id).toBe('c');
+    expect(nextWaiting(list, 'b')?.id).toBe('c');
+  });
+
+  it('wraps around to the start', () => {
+    expect(nextWaiting(list, 'c')?.id).toBe('a');
+    expect(nextWaiting(list, 'd')?.id).toBe('a');
+  });
+
+  it('starts from the top when nothing is selected', () => {
+    expect(nextWaiting(list, null)?.id).toBe('a');
+    expect(nextWaiting(list, 'finished')?.id).toBe('a');
+  });
+
+  it('returns null when no other session waits', () => {
+    expect(nextWaiting([session('a', 'done'), session('b', null)], 'a')).toBeNull();
+    expect(nextWaiting([session('b', null)], null)).toBeNull();
+    expect(nextWaiting([], null)).toBeNull();
+  });
+});
+
+describe('waitingCount', () => {
+  it('counts sessions with attention', () => {
+    expect(waitingCount([session('a', 'done'), session('b', null), session('c', 'input')])).toBe(2);
   });
 });

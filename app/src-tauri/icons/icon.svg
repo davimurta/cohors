@@ -1,6 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 28 28">
-  <rect width="28" height="28" rx="8" fill="#0F766E"/>
-  <g transform="translate(6 6) scale(0.6667)" fill="#FFFFFF">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS app icon grid: 824x824 body centred on a 1024 canvas, 100px margin -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#0F766E" filter="url(#shadow)"/>
+  <g transform="translate(100 100) scale(29.4286) translate(6 6) scale(0.6667)" fill="#FFFFFF">
     <circle cx="7" cy="7" r="3.2"/>
     <circle cx="17" cy="7" r="3.2"/>
     <circle cx="7" cy="17" r="3.2"/>
