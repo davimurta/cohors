@@ -91,3 +91,15 @@ const TOKENS = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFrac
 export function formatTokens(count: number): string {
   return TOKENS.format(count);
 }
+
+const USD = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' });
+const USD_SMALL = new Intl.NumberFormat('pt-BR', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 4,
+});
+
+/** "US$ 3,42"; amounts under one cent keep more digits: "US$ 0,0042". */
+export function formatUsd(dollars: number): string {
+  return (dollars > 0 && dollars < 0.01 ? USD_SMALL : USD).format(dollars);
+}

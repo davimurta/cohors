@@ -8,6 +8,7 @@ import {
   formatSpan,
   formatTimeRange,
   formatTokens,
+  formatUsd,
 } from './format.ts';
 
 const start = '2026-01-01T00:00:00Z';
@@ -101,5 +102,13 @@ describe('formatTokens', () => {
     // Intl puts a no-break space before the unit.
     expect(formatTokens(12_345)).toBe('12,3\u00a0mil');
     expect(formatTokens(1_200_000)).toBe('1,2\u00a0mi');
+  });
+});
+
+describe('formatUsd', () => {
+  it('shows cents, or more digits for tiny amounts', () => {
+    expect(formatUsd(3.4199)).toBe('US$\u00a03,42');
+    expect(formatUsd(0.00421)).toBe('US$\u00a00,0042');
+    expect(formatUsd(0)).toBe('US$\u00a00,00');
   });
 });

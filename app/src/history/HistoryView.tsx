@@ -11,6 +11,7 @@ import {
   formatTime,
   formatTimeRange,
   formatTokens,
+  formatUsd,
 } from '../session/format.ts';
 import { useHomeDir } from '../session/useHomeDir.ts';
 import { useNow } from '../session/useNow.ts';
@@ -129,6 +130,14 @@ function UsageDetails({ sessionId }: { sessionId: string }) {
       <dd>{formatTokens(usage.cacheReadTokens)}</dd>
       <dt>Tokens de saída</dt>
       <dd>{formatTokens(usage.outputTokens)}</dd>
+      {usage.costUsd !== undefined && usage.costUsd !== null && (
+        <>
+          <dt>Custo estimado</dt>
+          <dd title="Preço de tabela da API. Planos de assinatura não cobram por token.">
+            {formatUsd(usage.costUsd)}
+          </dd>
+        </>
+      )}
     </>
   );
 }

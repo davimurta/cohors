@@ -93,6 +93,9 @@ export interface TokenUsage {
   cacheCreationTokens: number;
   /** Models used, in order of first use. */
   models: string[];
+  /** Estimated cost at API list prices, in US dollars; null when no model
+   * had a known price. Absent from daemons built before it. */
+  costUsd?: number | null;
 }
 
 export interface ClaudeAccount {
